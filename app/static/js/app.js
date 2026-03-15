@@ -1,4 +1,18 @@
 document.addEventListener("DOMContentLoaded", () => {
+    // --- Fetch backend status ---
+    fetch("/api/status")
+        .then((r) => r.json())
+        .then((data) => {
+            const el = document.getElementById("backend-info");
+            if (el) {
+                const pcap = data.pcap_backend === "scapy" ? "scapy" : "stdlib";
+                const ssh = data.ssh_backend === "paramiko" ? "paramiko" : "subprocess+ssh";
+                el.textContent = `Backends: pcap=${pcap}, ssh=${ssh}`;
+                el.classList.remove("hidden");
+            }
+        })
+        .catch(() => {});
+
     // --- Tab Navigation ---
     const tabs = document.querySelectorAll(".tab");
     const tabContents = document.querySelectorAll(".tab-content");

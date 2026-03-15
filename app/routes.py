@@ -6,8 +6,7 @@ import traceback
 from flask import Blueprint, current_app, jsonify, render_template, request
 from werkzeug.utils import secure_filename
 
-from utils.pcap_parser import parse_pcap
-from utils.ssh_handler import SSHHandler
+from utils import parse_pcap, SSHHandler, PCAP_BACKEND, SSH_BACKEND
 
 main_bp = Blueprint("main", __name__)
 
@@ -19,6 +18,15 @@ def _allowed_file(filename):
 @main_bp.route("/")
 def index():
     return render_template("index.html")
+
+
+@main_bp.route("/api/status", methods=["GET"])
+def status():
+    """Return which backends are active."""
+    return jsonify({
+        "pcap_backend": PCAP_BACKEND,
+        "ssh_backend": SSH_BACKEND,
+    })
 
 
 @main_bp.route("/api/upload", methods=["POST"])
