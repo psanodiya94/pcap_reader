@@ -34,6 +34,19 @@ pcap_reader/
 
 ## Installation
 
+### Quick Setup (recommended)
+
+```bash
+# Clone the repository
+git clone https://github.com/<your-username>/pcap_reader.git
+cd pcap_reader
+
+# Run the setup script — creates venv and installs dependencies
+./setup.sh
+```
+
+### Manual Setup
+
 ```bash
 # Clone the repository
 git clone https://github.com/<your-username>/pcap_reader.git
@@ -41,15 +54,22 @@ cd pcap_reader
 
 # Create a virtual environment
 python3 -m venv venv
-source venv/bin/activate
+source venv/bin/activate    # Linux/macOS
+# venv\Scripts\activate     # Windows
 
-# Install dependencies
+# Install dependencies inside the virtual environment
 pip install -r requirements.txt
 ```
+
+> **Note:** All third-party packages are installed inside the virtual environment (`venv/`), not system-wide. Always activate the virtual environment before running the application.
 
 ## Usage
 
 ```bash
+# Activate the virtual environment first (if not already active)
+source venv/bin/activate
+
+# Start the application
 python run.py
 ```
 
