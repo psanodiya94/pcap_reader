@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PCAP Reader</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <header>
+        <h1>PCAP Reader</h1>
+        <p class="subtitle">Upload local pcap files or read from remote servers via SSH</p>
+    </header>
+
+    <main>
+        <!-- Tab Navigation -->
+        <div class="tabs">
+            <button class="tab active" data-tab="local">Local File Upload</button>
+            <button class="tab" data-tab="ssh-read">SSH - Read PCAP</button>
+            <button class="tab" data-tab="ssh-tshark">SSH - Tshark Output</button>
+        </div>
+
+        <!-- Local Upload Tab -->
+        <div class="tab-content active" id="tab-local">
+            <form id="upload-form" enctype="multipart/form-data">
+                <div class="form-group">
+                    <label for="pcap-file">Select PCAP File</label>
+                    <div class="file-input-wrapper">
+                        <input type="file" id="pcap-file" name="file" accept=".pcap,.pcapng,.cap">
+                        <span class="file-label" id="file-label">Choose a .pcap, .pcapng, or .cap file</span>
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-primary">Parse PCAP</button>
+            </form>
+        </div>
+
+        <!-- SSH Read Tab -->
+        <div class="tab-content" id="tab-ssh-read">
+            <form id="ssh-read-form">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="ssh-host">Server IP / Hostname</label>
+                        <input type="text" id="ssh-host" placeholder="192.168.1.100 or server.example.com" required>
+                    </div>
+                    <div class="form-group form-group-small">
+                        <label for="ssh-port">Port</label>
+                        <input type="number" id="ssh-port" value="22" min="1" max="65535">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="ssh-user">Username</label>
+                        <input type="text" id="ssh-user" placeholder="root" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="ssh-pass">Password</label>
+                        <input type="password" id="ssh-pass" placeholder="Password (or use SSH key)">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="ssh-key">SSH Key Path (on server running this app)</label>
+                    <input type="text" id="ssh-key" placeholder="/home/user/.ssh/id_rsa">
+                </div>
+                <div class="form-group">
+                    <label for="ssh-remote-path">Remote PCAP File Path</label>
+                    <input type="text" id="ssh-remote-path" placeholder="/tmp/capture.pcap" required>
+                </div>
+                <button type="submit" class="btn btn-primary">Read Remote PCAP</button>
+            </form>
+        </div>
+
+        <!-- SSH Tshark Tab -->
+        <div class="tab-content" id="tab-ssh-tshark">
+            <form id="ssh-tshark-form">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="tshark-host">Server IP / Hostname</label>
+                        <input type="text" id="tshark-host" placeholder="192.168.1.100 or server.example.com" required>
+                    </div>
+                    <div class="form-group form-group-small">
+                        <label for="tshark-port">Port</label>
+                        <input type="number" id="tshark-port" value="22" min="1" max="65535">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="tshark-user">Username</label>
+                        <input type="text" id="tshark-user" placeholder="root" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="tshark-pass">Password</label>
+                        <input type="password" id="tshark-pass" placeholder="Password (or use SSH key)">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="tshark-key">SSH Key Path (on server running this app)</label>
+                    <input type="text" id="tshark-key" placeholder="/home/user/.ssh/id_rsa">
+                </div>
+                <div class="form-group">
+                    <label for="tshark-remote-path">Remote PCAP File Path</label>
+                    <input type="text" id="tshark-remote-path" placeholder="/tmp/capture.pcap" required>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="tshark-filter">Display Filter (optional)</label>
+                        <input type="text" id="tshark-filter" placeholder="tcp.port == 80">
+                    </div>
+                    <div class="form-group form-group-small">
+                        <label for="tshark-max">Max Packets</label>
+                        <input type="number" id="tshark-max" value="1000" min="1" max="100000">
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-primary">Run Tshark</button>
+            </form>
+        </div>
+
+        <!-- Loading Indicator -->
+        <div id="loading" class="hidden">
+            <div class="spinner"></div>
+            <span>Processing...</span>
+        </div>
+
+        <!-- Error Display -->
+        <div id="error-display" class="hidden">
+            <div class="error-box">
+                <strong>Error:</strong> <span id="error-message"></span>
+                <button class="btn-close" id="close-error">&times;</button>
+            </div>
+        </div>
+
+        <!-- Results Section -->
+        <div id="results" class="hidden">
+            <h2>Results</h2>
+
+            <!-- Summary Panel -->
+            <div id="summary-panel" class="summary-panel hidden">
+                <h3>Summary</h3>
+                <div class="summary-grid">
+                    <div class="summary-card">
+                        <span class="summary-label">Total Packets</span>
+                        <span class="summary-value" id="total-packets">0</span>
+                    </div>
+                    <div class="summary-card">
+                        <span class="summary-label">Unique Sources</span>
+                        <span class="summary-value" id="unique-sources">0</span>
+                    </div>
+                    <div class="summary-card">
+                        <span class="summary-label">Unique Destinations</span>
+                        <span class="summary-value" id="unique-destinations">0</span>
+                    </div>
+                </div>
+                <div class="protocol-breakdown">
+                    <h4>Protocol Breakdown</h4>
+                    <div id="protocol-bars"></div>
+                </div>
+            </div>
+
+            <!-- Filter -->
+            <div id="filter-bar" class="filter-bar hidden">
+                <input type="text" id="packet-filter" placeholder="Filter by protocol, IP address, or info...">
+            </div>
+
+            <!-- Packet Table -->
+            <div id="packet-table-wrapper" class="hidden">
+                <table id="packet-table">
+                    <thead>
+                        <tr>
+                            <th>No.</th>
+                            <th>Source</th>
+                            <th>Destination</th>
+                            <th>Protocol</th>
+                            <th>Length</th>
+                            <th>Info</th>
+                        </tr>
+                    </thead>
+                    <tbody id="packet-tbody"></tbody>
+                </table>
+            </div>
+
+            <!-- Tshark Output -->
+            <div id="tshark-output-wrapper" class="hidden">
+                <h3>Tshark Output</h3>
+                <div class="tshark-meta" id="tshark-meta"></div>
+                <pre id="tshark-output"></pre>
+            </div>
+        </div>
+    </main>
+
+    <footer>
+        <p>PCAP Reader &mdash; Built with Flask &amp; Scapy</p>
+    </footer>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
