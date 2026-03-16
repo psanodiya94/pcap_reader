@@ -451,6 +451,104 @@ input[type="file"]::file-selector-button {
     font-family: "SF Mono", "Cascadia Code", "Fira Code", Consolas, monospace;
 }
 
+/* Hex Dump Modal */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    padding: 1rem;
+}
+
+.modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    width: 100%;
+    max-width: 900px;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid var(--border);
+}
+
+.modal-header h3 {
+    font-size: 1.05rem;
+    font-weight: 600;
+}
+
+.modal-body {
+    padding: 1.25rem;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.hexdump-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    padding: 2rem;
+    color: var(--text-muted);
+}
+
+.hexdump-section {
+    margin-bottom: 1.25rem;
+}
+
+.hexdump-section-header {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    margin-bottom: 0.4rem;
+}
+
+.hexdump-section-name {
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--primary);
+}
+
+.hexdump-section-meta {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    font-family: monospace;
+}
+
+.hexdump-lines {
+    background: var(--bg);
+    padding: 0.6rem 0.8rem;
+    border-radius: 6px;
+    font-family: "SF Mono", "Cascadia Code", "Fira Code", Consolas, monospace;
+    font-size: 0.78rem;
+    line-height: 1.55;
+    overflow-x: auto;
+    white-space: pre;
+    border-left: 3px solid var(--border);
+}
+
+.hexdump-section:nth-child(1) .hexdump-lines { border-left-color: var(--accent-arp); }
+.hexdump-section:nth-child(2) .hexdump-lines { border-left-color: var(--accent-tcp); }
+.hexdump-section:nth-child(3) .hexdump-lines { border-left-color: var(--accent-udp); }
+.hexdump-section:nth-child(4) .hexdump-lines { border-left-color: var(--accent-dns); }
+.hexdump-section:nth-child(5) .hexdump-lines { border-left-color: var(--accent-http); }
+
+/* Clickable rows */
+#packet-table tbody tr {
+    cursor: pointer;
+}
+
 /* Utility */
 .hidden {
     display: none !important;

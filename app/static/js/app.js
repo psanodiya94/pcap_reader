@@ -235,6 +235,8 @@ document.addEventListener("DOMContentLoaded", () => {
         packets.forEach((pkt) => {
             const protoClass = `proto-${pkt.protocol.toLowerCase()}`;
             const tr = document.createElement("tr");
+            tr.setAttribute("data-pkt-no", pkt.no);
+            tr.setAttribute("title", "Click to view hex dump");
             tr.innerHTML = `
                 <td>${pkt.no}</td>
                 <td>${escapeHtml(pkt.src)}</td>
@@ -243,6 +245,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 <td>${pkt.length}</td>
                 <td>${escapeHtml(pkt.info)}</td>
             `;
+            tr.addEventListener("click", () => openHexDump(pkt.no, pkt));
             packetTbody.appendChild(tr);
         });
     }
@@ -278,6 +281,66 @@ document.addEventListener("DOMContentLoaded", () => {
         filterBar.classList.add("hidden");
         packetTableWrapper.classList.add("hidden");
         tsharkOutputWrapper.classList.remove("hidden");
+    }
+
+    // --- Hex Dump Modal ---
+    const hexModal = document.getElementById("hexdump-modal");
+    const hexTitle = document.getElementById("hexdump-title");
+    const hexBody = document.getElementById("hexdump-content");
+    const hexLoading = document.getElementById("hexdump-loading");
+    const hexClose = document.getElementById("hexdump-close");
+
+    hexClose.addEventListener("click", closeHexDump);
+    hexModal.addEventListener("click", (e) => {
+        if (e.target === hexModal) closeHexDump();
+    });
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" && !hexModal.classList.contains("hidden")) {
+            closeHexDump();
+        }
+    });
+
+    function closeHexDump() {
+        hexModal.classList.add("hidden");
+    }
+
+    async function openHexDump(packetNo, pkt) {
+        hexModal.classList.remove("hidden");
+        hexTitle.textContent = `Packet #${packetNo} — ${pkt.protocol} — ${pkt.src} → ${pkt.dst} (${pkt.length} bytes)`;
+        hexBody.innerHTML = "";
+        hexLoading.classList.remove("hidden");
+
+        try {
+            const resp = await fetch(`/api/hexdump/${packetNo}`);
+            const data = await resp.json();
+            hexLoading.classList.add("hidden");
+
+            if (!resp.ok) {
+                hexBody.innerHTML = `<p style="color:var(--error)">${escapeHtml(data.error || "Failed to load hex dump")}</p>`;
+                return;
+            }
+
+            let html = "";
+            (data.sections || []).forEach((section) => {
+                html += `<div class="hexdump-section">`;
+                html += `<div class="hexdump-section-header">`;
+                html += `<span class="hexdump-section-name">${escapeHtml(section.name)}</span>`;
+                html += `<span class="hexdump-section-meta">offset 0x${section.offset.toString(16).toUpperCase().padStart(4, "0")} &middot; ${section.length} bytes</span>`;
+                html += `</div>`;
+                html += `<pre class="hexdump-lines">`;
+                html += escapeHtml((section.hex_lines || []).join("\n"));
+                html += `</pre></div>`;
+            });
+
+            if (!data.sections || data.sections.length === 0) {
+                html = `<p style="color:var(--text-muted)">No hex data available for this packet.</p>`;
+            }
+
+            hexBody.innerHTML = html;
+        } catch (err) {
+            hexLoading.classList.add("hidden");
+            hexBody.innerHTML = `<p style="color:var(--error)">Request failed: ${escapeHtml(err.message)}</p>`;
+        }
     }
 
     // --- Utility ---

@@ -23,3 +23,6 @@ try:
 except ImportError:
     from utils.ssh_handler_stdlib import SSHHandlerStdlib as SSHHandler
     SSH_BACKEND = "subprocess"
+
+# --- Hex Dump (always stdlib) ---
+from utils.hex_dump import get_packet_hexdump

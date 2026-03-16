@@ -185,6 +185,23 @@
                 <pre id="tshark-output"></pre>
             </div>
         </div>
+
+        <!-- Hex Dump Modal -->
+        <div id="hexdump-modal" class="modal-overlay hidden">
+            <div class="modal">
+                <div class="modal-header">
+                    <h3 id="hexdump-title">Hex Dump</h3>
+                    <button class="btn-close" id="hexdump-close">&times;</button>
+                </div>
+                <div class="modal-body" id="hexdump-body">
+                    <div class="hexdump-loading hidden" id="hexdump-loading">
+                        <div class="spinner"></div>
+                        <span>Loading hex dump...</span>
+                    </div>
+                    <div id="hexdump-content"></div>
+                </div>
+            </div>
+        </div>
     </main>
 
     <footer>
