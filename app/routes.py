@@ -198,4 +198,4 @@ def check_tshark():
             return jsonify({"tshark_available": available})
 
     except Exception as e:
-        return jsonify({"error": str(e)}, 500)
+        return jsonify({"error": str(e)}), 500
