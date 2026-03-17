@@ -8,11 +8,12 @@ import cgi
 import json
 import mimetypes
 import os
-import tempfile
+import re
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 
 from utils import parse_pcap, SSHHandler, PCAP_BACKEND, SSH_BACKEND
+from utils.hex_dump import get_packet_hexdump
 
 # Paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -24,6 +25,9 @@ MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50 MB
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+# Store the last uploaded/downloaded pcap file path (single-user stdlib server)
+_active_pcap_file = None
+
 
 def _allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -32,16 +36,22 @@ def _allowed_file(filename):
 def _secure_filename(filename):
     """Basic filename sanitization."""
     filename = os.path.basename(filename)
-    # Keep only safe characters
     safe = "".join(c if (c.isalnum() or c in "._-") else "_" for c in filename)
     return safe or "upload"
+
+
+def _set_active_file(filepath):
+    """Store the active pcap file, cleaning up the previous one."""
+    global _active_pcap_file
+    if _active_pcap_file and os.path.exists(_active_pcap_file) and _active_pcap_file != filepath:
+        os.remove(_active_pcap_file)
+    _active_pcap_file = filepath
 
 
 class PCAPRequestHandler(BaseHTTPRequestHandler):
     """HTTP request handler for the PCAP Reader application."""
 
     def log_message(self, format, *args):
-        """Override to use cleaner logging."""
         print(f"[{self.log_date_time_string()}] {format % args}")
 
     # --- GET routes ---
@@ -56,6 +66,9 @@ class PCAPRequestHandler(BaseHTTPRequestHandler):
             self._serve_static(path)
         elif path == "/api/status":
             self._send_json({"pcap_backend": PCAP_BACKEND, "ssh_backend": SSH_BACKEND})
+        elif re.match(r"^/api/hexdump/(\d+)$", path):
+            pkt_no = int(re.match(r"^/api/hexdump/(\d+)$", path).group(1))
+            self._handle_hexdump(pkt_no)
         else:
             self._send_error(404, "Not found")
 
@@ -87,7 +100,6 @@ class PCAPRequestHandler(BaseHTTPRequestHandler):
         with open(index_path, "r") as f:
             html = f.read()
 
-        # Replace Flask url_for calls with direct paths
         html = html.replace(
             "{{ url_for('static', filename='css/style.css') }}", "/static/css/style.css"
         )
@@ -98,7 +110,6 @@ class PCAPRequestHandler(BaseHTTPRequestHandler):
         self._send_response(200, html.encode(), "text/html")
 
     def _serve_static(self, path):
-        # Prevent directory traversal
         safe_path = os.path.normpath(path.lstrip("/"))
         if ".." in safe_path:
             self._send_error(403, "Forbidden")
@@ -122,7 +133,6 @@ class PCAPRequestHandler(BaseHTTPRequestHandler):
             self._send_json({"error": "Expected multipart/form-data"}, 400)
             return
 
-        # Parse multipart form data
         try:
             content_length = int(self.headers.get("Content-Length", 0))
             if content_length > MAX_CONTENT_LENGTH:
@@ -162,12 +172,12 @@ class PCAPRequestHandler(BaseHTTPRequestHandler):
             with open(filepath, "wb") as f:
                 f.write(file_item.file.read())
             result = parse_pcap(filepath)
+            _set_active_file(filepath)
             self._send_json(result)
         except Exception as e:
-            self._send_json({"error": f"Failed to parse pcap: {e}"}, 500)
-        finally:
             if os.path.exists(filepath):
                 os.remove(filepath)
+            self._send_json({"error": f"Failed to parse pcap: {e}"}, 500)
 
     def _handle_ssh_read(self):
         data = self._read_json_body()
@@ -191,14 +201,31 @@ class PCAPRequestHandler(BaseHTTPRequestHandler):
                 local_path = ssh.download_pcap(data["remote_path"], UPLOAD_DIR)
                 try:
                     result = parse_pcap(local_path)
+                    _set_active_file(local_path)
                     self._send_json(result)
-                finally:
+                except Exception:
                     if os.path.exists(local_path):
                         os.remove(local_path)
+                    raise
         except FileNotFoundError as e:
             self._send_json({"error": f"Remote file not found: {e}"}, 404)
         except Exception as e:
             self._send_json({"error": f"SSH operation failed: {e}"}, 500)
+
+    def _handle_hexdump(self, packet_no):
+        """Return hex dump for a specific packet."""
+        global _active_pcap_file
+        if not _active_pcap_file or not os.path.exists(_active_pcap_file):
+            self._send_json({"error": "No pcap file loaded. Upload or read a file first."}, 404)
+            return
+
+        try:
+            result = get_packet_hexdump(_active_pcap_file, packet_no)
+            self._send_json(result)
+        except ValueError as e:
+            self._send_json({"error": str(e)}, 404)
+        except Exception as e:
+            self._send_json({"error": f"Hex dump failed: {e}"}, 500)
 
     def _handle_ssh_tshark(self):
         data = self._read_json_body()
