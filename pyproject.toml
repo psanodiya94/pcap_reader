@@ -1,0 +1,20 @@
+[project]
+name = "pcap-reader"
+version = "1.0.0"
+description = "Web-based PCAP file analysis tool with zero mandatory dependencies"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+
+# No mandatory dependencies — runs on stdlib alone
+dependencies = []
+
+[project.optional-dependencies]
+full = [
+    "flask>=3.1,<4",
+    "scapy>=2.6,<3",
+    "paramiko>=3.5,<4",
+    "werkzeug>=3.1,<4",
+]
+
+[project.scripts]
+pcap-reader = "run:main"

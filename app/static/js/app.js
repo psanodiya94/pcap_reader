@@ -13,15 +13,19 @@ document.addEventListener("DOMContentLoaded", () => {
         })
         .catch(() => {});
 
-    // --- Tab Navigation ---
+    // --- Tab Navigation (with ARIA) ---
     const tabs = document.querySelectorAll(".tab");
     const tabContents = document.querySelectorAll(".tab-content");
 
     tabs.forEach((tab) => {
         tab.addEventListener("click", () => {
-            tabs.forEach((t) => t.classList.remove("active"));
+            tabs.forEach((t) => {
+                t.classList.remove("active");
+                t.setAttribute("aria-selected", "false");
+            });
             tabContents.forEach((tc) => tc.classList.remove("active"));
             tab.classList.add("active");
+            tab.setAttribute("aria-selected", "true");
             document.getElementById(`tab-${tab.dataset.tab}`).classList.add("active");
             hideResults();
             hideError();
@@ -43,6 +47,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const packetFilter = document.getElementById("packet-filter");
 
     let allPackets = [];
+    let activeAbortController = null;
 
     // --- Error handling ---
     document.getElementById("close-error").addEventListener("click", hideError);
@@ -74,6 +79,18 @@ document.addEventListener("DOMContentLoaded", () => {
         tsharkOutputWrapper.classList.add("hidden");
     }
 
+    /**
+     * Create an AbortController for fetch requests.
+     * Aborts any previously active request to prevent race conditions.
+     */
+    function createAbortController() {
+        if (activeAbortController) {
+            activeAbortController.abort();
+        }
+        activeAbortController = new AbortController();
+        return activeAbortController;
+    }
+
     // --- File upload label ---
     const pcapFile = document.getElementById("pcap-file");
     if (pcapFile) {
@@ -97,9 +114,14 @@ document.addEventListener("DOMContentLoaded", () => {
         const formData = new FormData();
         formData.append("file", fileInput.files[0]);
 
+        const controller = createAbortController();
         showLoading();
         try {
-            const resp = await fetch("/api/upload", { method: "POST", body: formData });
+            const resp = await fetch("/api/upload", {
+                method: "POST",
+                body: formData,
+                signal: controller.signal,
+            });
             const data = await resp.json();
             hideLoading();
             if (!resp.ok) {
@@ -109,7 +131,9 @@ document.addEventListener("DOMContentLoaded", () => {
             displayParsedResults(data);
         } catch (err) {
             hideLoading();
-            showError(`Request failed: ${err.message}`);
+            if (err.name !== "AbortError") {
+                showError(`Request failed: ${err.message}`);
+            }
         }
     });
 
@@ -125,12 +149,14 @@ document.addEventListener("DOMContentLoaded", () => {
             remote_path: document.getElementById("ssh-remote-path").value,
         };
 
+        const controller = createAbortController();
         showLoading();
         try {
             const resp = await fetch("/api/ssh/read", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload),
+                signal: controller.signal,
             });
             const data = await resp.json();
             hideLoading();
@@ -141,7 +167,9 @@ document.addEventListener("DOMContentLoaded", () => {
             displayParsedResults(data);
         } catch (err) {
             hideLoading();
-            showError(`Request failed: ${err.message}`);
+            if (err.name !== "AbortError") {
+                showError(`Request failed: ${err.message}`);
+            }
         }
     });
 
@@ -159,12 +187,14 @@ document.addEventListener("DOMContentLoaded", () => {
             max_packets: parseInt(document.getElementById("tshark-max").value) || 1000,
         };
 
+        const controller = createAbortController();
         showLoading();
         try {
             const resp = await fetch("/api/ssh/tshark", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload),
+                signal: controller.signal,
             });
             const data = await resp.json();
             hideLoading();
@@ -175,24 +205,26 @@ document.addEventListener("DOMContentLoaded", () => {
             displayTsharkResults(data);
         } catch (err) {
             hideLoading();
-            showError(`Request failed: ${err.message}`);
+            if (err.name !== "AbortError") {
+                showError(`Request failed: ${err.message}`);
+            }
         }
     });
 
     // --- Display parsed pcap results ---
     function displayParsedResults(data) {
-        allPackets = data.packets || [];
-        const summary = data.summary || {};
+        allPackets = data.packets ?? [];
+        const summary = data.summary ?? {};
 
         // Summary
-        document.getElementById("total-packets").textContent = summary.total_packets || 0;
-        document.getElementById("unique-sources").textContent = summary.unique_sources || 0;
-        document.getElementById("unique-destinations").textContent = summary.unique_destinations || 0;
+        document.getElementById("total-packets").textContent = summary.total_packets ?? 0;
+        document.getElementById("unique-sources").textContent = summary.unique_sources ?? 0;
+        document.getElementById("unique-destinations").textContent = summary.unique_destinations ?? 0;
 
         // Protocol bars
         const protocolBars = document.getElementById("protocol-bars");
         protocolBars.innerHTML = "";
-        const protocols = summary.protocols || {};
+        const protocols = summary.protocols ?? {};
         const maxCount = Math.max(...Object.values(protocols), 1);
 
         const protocolColors = {
@@ -208,11 +240,11 @@ document.addEventListener("DOMContentLoaded", () => {
             .sort((a, b) => b[1] - a[1])
             .forEach(([proto, count]) => {
                 const pct = (count / maxCount) * 100;
-                const color = protocolColors[proto] || "var(--accent-other)";
+                const color = protocolColors[proto] ?? "var(--accent-other)";
                 const bar = document.createElement("div");
                 bar.className = "protocol-bar";
                 bar.innerHTML = `
-                    <span class="protocol-bar-label">${proto}</span>
+                    <span class="protocol-bar-label">${escapeHtml(proto)}</span>
                     <div class="protocol-bar-track">
                         <div class="protocol-bar-fill" style="width:${pct}%;background:${color}"></div>
                     </div>
@@ -232,9 +264,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function renderPacketTable(packets) {
         packetTbody.innerHTML = "";
-        packets.forEach((pkt) => {
+        const fragment = document.createDocumentFragment();
+
+        for (const pkt of packets) {
             const protoClass = `proto-${pkt.protocol.toLowerCase()}`;
             const tr = document.createElement("tr");
+            tr.tabIndex = 0;
             tr.setAttribute("data-pkt-no", pkt.no);
             tr.setAttribute("title", "Click to view hex dump");
             tr.innerHTML = `
@@ -246,30 +281,42 @@ document.addEventListener("DOMContentLoaded", () => {
                 <td>${escapeHtml(pkt.info)}</td>
             `;
             tr.addEventListener("click", () => openHexDump(pkt.no, pkt));
-            packetTbody.appendChild(tr);
-        });
+            tr.addEventListener("keydown", (e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    openHexDump(pkt.no, pkt);
+                }
+            });
+            fragment.appendChild(tr);
+        }
+
+        packetTbody.appendChild(fragment);
     }
 
-    // --- Filter ---
+    // --- Filter (debounced) ---
+    let filterTimeout = null;
     packetFilter.addEventListener("input", () => {
-        const query = packetFilter.value.toLowerCase();
-        if (!query) {
-            renderPacketTable(allPackets);
-            return;
-        }
-        const filtered = allPackets.filter(
-            (pkt) =>
-                pkt.protocol.toLowerCase().includes(query) ||
-                pkt.src.toLowerCase().includes(query) ||
-                pkt.dst.toLowerCase().includes(query) ||
-                pkt.info.toLowerCase().includes(query)
-        );
-        renderPacketTable(filtered);
+        clearTimeout(filterTimeout);
+        filterTimeout = setTimeout(() => {
+            const query = packetFilter.value.toLowerCase();
+            if (!query) {
+                renderPacketTable(allPackets);
+                return;
+            }
+            const filtered = allPackets.filter(
+                (pkt) =>
+                    pkt.protocol.toLowerCase().includes(query) ||
+                    pkt.src.toLowerCase().includes(query) ||
+                    pkt.dst.toLowerCase().includes(query) ||
+                    pkt.info.toLowerCase().includes(query)
+            );
+            renderPacketTable(filtered);
+        }, 150);
     });
 
     // --- Display tshark results ---
     function displayTsharkResults(data) {
-        tsharkMeta.textContent = `Command: ${data.command || "N/A"}`;
+        tsharkMeta.textContent = `Command: ${data.command ?? "N/A"}`;
         tsharkOutput.textContent = data.output || "(no output)";
 
         if (data.errors) {
@@ -283,29 +330,23 @@ document.addEventListener("DOMContentLoaded", () => {
         tsharkOutputWrapper.classList.remove("hidden");
     }
 
-    // --- Hex Dump Modal ---
+    // --- Hex Dump Modal (using <dialog>) ---
     const hexModal = document.getElementById("hexdump-modal");
     const hexTitle = document.getElementById("hexdump-title");
     const hexBody = document.getElementById("hexdump-content");
     const hexLoading = document.getElementById("hexdump-loading");
     const hexClose = document.getElementById("hexdump-close");
 
-    hexClose.addEventListener("click", closeHexDump);
+    hexClose.addEventListener("click", () => hexModal.close());
     hexModal.addEventListener("click", (e) => {
-        if (e.target === hexModal) closeHexDump();
-    });
-    document.addEventListener("keydown", (e) => {
-        if (e.key === "Escape" && !hexModal.classList.contains("hidden")) {
-            closeHexDump();
+        // Close when clicking the backdrop (outside the .modal div)
+        if (e.target === hexModal) {
+            hexModal.close();
         }
     });
 
-    function closeHexDump() {
-        hexModal.classList.add("hidden");
-    }
-
     async function openHexDump(packetNo, pkt) {
-        hexModal.classList.remove("hidden");
+        hexModal.showModal();
         hexTitle.textContent = `Packet #${packetNo} — ${pkt.protocol} — ${pkt.src} → ${pkt.dst} (${pkt.length} bytes)`;
         hexBody.innerHTML = "";
         hexLoading.classList.remove("hidden");
@@ -321,18 +362,18 @@ document.addEventListener("DOMContentLoaded", () => {
             }
 
             let html = "";
-            (data.sections || []).forEach((section) => {
+            for (const section of data.sections ?? []) {
                 html += `<div class="hexdump-section">`;
                 html += `<div class="hexdump-section-header">`;
                 html += `<span class="hexdump-section-name">${escapeHtml(section.name)}</span>`;
                 html += `<span class="hexdump-section-meta">offset 0x${section.offset.toString(16).toUpperCase().padStart(4, "0")} &middot; ${section.length} bytes</span>`;
                 html += `</div>`;
                 html += `<pre class="hexdump-lines">`;
-                html += escapeHtml((section.hex_lines || []).join("\n"));
+                html += escapeHtml((section.hex_lines ?? []).join("\n"));
                 html += `</pre></div>`;
-            });
+            }
 
-            if (!data.sections || data.sections.length === 0) {
+            if (!data.sections?.length) {
                 html = `<p style="color:var(--text-muted)">No hex data available for this packet.</p>`;
             }
 
@@ -346,7 +387,7 @@ document.addEventListener("DOMContentLoaded", () => {
     // --- Utility ---
     function escapeHtml(str) {
         const div = document.createElement("div");
-        div.textContent = str || "";
+        div.textContent = str ?? "";
         return div.innerHTML;
     }
 });

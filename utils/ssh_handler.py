@@ -1,7 +1,9 @@
 """SSH handler for remote pcap file operations."""
 
+from __future__ import annotations
+
 import os
-import tempfile
+from typing import Any, Self
 
 import paramiko
 
@@ -9,20 +11,27 @@ import paramiko
 class SSHHandler:
     """Manage SSH connections to remote servers for pcap operations."""
 
-    def __init__(self, hostname, username, password=None, key_path=None, port=22):
+    def __init__(
+        self,
+        hostname: str,
+        username: str,
+        password: str | None = None,
+        key_path: str | None = None,
+        port: int = 22,
+    ) -> None:
         self.hostname = hostname
         self.username = username
         self.password = password
         self.key_path = key_path
         self.port = port
-        self.client = None
+        self.client: paramiko.SSHClient | None = None
 
-    def connect(self):
+    def connect(self) -> None:
         """Establish SSH connection."""
         self.client = paramiko.SSHClient()
         self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-        connect_kwargs = {
+        connect_kwargs: dict[str, Any] = {
             "hostname": self.hostname,
             "port": self.port,
             "username": self.username,
@@ -37,7 +46,7 @@ class SSHHandler:
 
         self.client.connect(**connect_kwargs)
 
-    def download_pcap(self, remote_path, local_dir):
+    def download_pcap(self, remote_path: str, local_dir: str) -> str:
         """Download a pcap file from the remote server."""
         if not self.client:
             raise RuntimeError("Not connected. Call connect() first.")
@@ -54,7 +63,13 @@ class SSHHandler:
 
         return local_path
 
-    def run_tshark(self, remote_pcap_path, display_filter=None, decode_as=None, max_packets=1000):
+    def run_tshark(
+        self,
+        remote_pcap_path: str,
+        display_filter: str | None = None,
+        decode_as: str | None = None,
+        max_packets: int = 1000,
+    ) -> dict[str, str]:
         """Run tshark on the remote server and return output."""
         if not self.client:
             raise RuntimeError("Not connected. Call connect() first.")
@@ -90,7 +105,7 @@ class SSHHandler:
             "command": cmd,
         }
 
-    def check_tshark_available(self):
+    def check_tshark_available(self) -> bool:
         """Check if tshark is installed on the remote server."""
         if not self.client:
             raise RuntimeError("Not connected. Call connect() first.")
@@ -98,15 +113,20 @@ class SSHHandler:
         _, stdout, _ = self.client.exec_command("which tshark")
         return bool(stdout.read().decode().strip())
 
-    def close(self):
+    def close(self) -> None:
         """Close SSH connection."""
         if self.client:
             self.client.close()
             self.client = None
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         self.connect()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: Any,
+    ) -> None:
         self.close()

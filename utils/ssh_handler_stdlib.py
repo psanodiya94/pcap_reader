@@ -1,14 +1,24 @@
 """SSH handler using only Python standard library (subprocess + system ssh/scp)."""
 
+from __future__ import annotations
+
 import os
 import shutil
 import subprocess
+from typing import Any, Self
 
 
 class SSHHandlerStdlib:
     """Manage SSH operations using the system ssh/scp commands."""
 
-    def __init__(self, hostname, username, password=None, key_path=None, port=22):
+    def __init__(
+        self,
+        hostname: str,
+        username: str,
+        password: str | None = None,
+        key_path: str | None = None,
+        port: int = 22,
+    ) -> None:
         self.hostname = hostname
         self.username = username
         self.password = password
@@ -22,7 +32,7 @@ class SSHHandlerStdlib:
                 "Install OpenSSH or install paramiko: pip install paramiko"
             )
 
-    def _build_ssh_opts(self):
+    def _build_ssh_opts(self) -> list[str]:
         """Build common SSH options."""
         opts = [
             "-o", "StrictHostKeyChecking=no",
@@ -33,7 +43,7 @@ class SSHHandlerStdlib:
             opts += ["-i", self.key_path]
         return opts
 
-    def _build_scp_opts(self):
+    def _build_scp_opts(self) -> list[str]:
         """Build common SCP options."""
         opts = [
             "-o", "StrictHostKeyChecking=no",
@@ -44,19 +54,19 @@ class SSHHandlerStdlib:
             opts += ["-i", self.key_path]
         return opts
 
-    def _remote_target(self):
+    def _remote_target(self) -> str:
         return f"{self.username}@{self.hostname}"
 
-    def connect(self):
+    def connect(self) -> None:
         """Test SSH connectivity."""
-        cmd = ["ssh"] + self._build_ssh_opts() + [self._remote_target(), "echo", "ok"]
+        cmd = ["ssh", *self._build_ssh_opts(), self._remote_target(), "echo", "ok"]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         if result.returncode != 0:
             raise ConnectionError(
                 f"SSH connection failed: {result.stderr.strip()}"
             )
 
-    def download_pcap(self, remote_path, local_dir):
+    def download_pcap(self, remote_path: str, local_dir: str) -> str:
         """Download a pcap file from the remote server using scp."""
         if not shutil.which("scp"):
             raise FileNotFoundError(
@@ -66,7 +76,8 @@ class SSHHandlerStdlib:
         filename = os.path.basename(remote_path)
         local_path = os.path.join(local_dir, f"remote_{filename}")
 
-        cmd = ["scp"] + self._build_scp_opts() + [
+        cmd = [
+            "scp", *self._build_scp_opts(),
             f"{self._remote_target()}:{remote_path}",
             local_path,
         ]
@@ -80,7 +91,13 @@ class SSHHandlerStdlib:
 
         return local_path
 
-    def run_tshark(self, remote_pcap_path, display_filter=None, decode_as=None, max_packets=1000):
+    def run_tshark(
+        self,
+        remote_pcap_path: str,
+        display_filter: str | None = None,
+        decode_as: str | None = None,
+        max_packets: int = 1000,
+    ) -> dict[str, str]:
         """Run tshark on the remote server via SSH."""
         # Build the remote tshark command
         remote_cmd = f"tshark -r {remote_pcap_path} -c {max_packets}"
@@ -93,7 +110,7 @@ class SSHHandlerStdlib:
             safe_decode = decode_as.replace("'", "'\\''")
             remote_cmd += f" -d '{safe_decode}'"
 
-        cmd = ["ssh"] + self._build_ssh_opts() + [self._remote_target(), remote_cmd]
+        cmd = ["ssh", *self._build_ssh_opts(), self._remote_target(), remote_cmd]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
 
         return {
@@ -102,19 +119,23 @@ class SSHHandlerStdlib:
             "command": remote_cmd,
         }
 
-    def check_tshark_available(self):
+    def check_tshark_available(self) -> bool:
         """Check if tshark is installed on the remote server."""
-        cmd = ["ssh"] + self._build_ssh_opts() + [self._remote_target(), "which", "tshark"]
+        cmd = ["ssh", *self._build_ssh_opts(), self._remote_target(), "which", "tshark"]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         return result.returncode == 0 and bool(result.stdout.strip())
 
-    def close(self):
+    def close(self) -> None:
         """No-op for subprocess-based handler."""
-        pass
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         self.connect()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: Any,
+    ) -> None:
         self.close()
