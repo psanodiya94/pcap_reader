@@ -15,42 +15,59 @@ No third-party packages are required. To install them (in a venv):
   ./setup.sh --install-deps
 """
 
+from __future__ import annotations
+
+import logging
 import sys
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger("pcap_reader")
 
-def _check_virtualenv():
+
+def _check_virtualenv() -> None:
     """Warn if running outside a virtual environment."""
     if sys.prefix == sys.base_prefix:
-        print(
-            "NOTE: You are not running inside a virtual environment.\n"
-            "This is fine — the app works with standard library only.\n"
-            "To install optional third-party packages, use a venv:\n"
-            "  ./setup.sh --install-deps\n"
+        logger.info(
+            "Not running inside a virtual environment. "
+            "This is fine — the app works with standard library only. "
+            "To install optional third-party packages, use a venv: "
+            "./setup.sh --install-deps"
         )
 
 
-def _print_backends():
-    """Print which backends are being used."""
+def _print_backends() -> None:
+    """Log which backends are being used."""
     from utils import PCAP_BACKEND, SSH_BACKEND
-    print(f"  PCAP parser : {PCAP_BACKEND}")
-    print(f"  SSH handler : {SSH_BACKEND}")
+
+    logger.info("PCAP parser : %s", PCAP_BACKEND)
+    logger.info("SSH handler : %s", SSH_BACKEND)
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Application entry point."""
     _check_virtualenv()
 
-    print("=== PCAP Reader ===")
+    logger.info("=== PCAP Reader ===")
     _print_backends()
 
     try:
         import flask  # noqa: F401
-        print(f"  Web server  : Flask")
-        print()
+
+        logger.info("Web server  : Flask")
         from app import create_app
+
         app = create_app()
         app.run(host="0.0.0.0", port=5000, debug=True)
     except ImportError:
-        print(f"  Web server  : stdlib (http.server)")
-        print()
+        logger.info("Web server  : stdlib (http.server)")
         from app.server_stdlib import run_stdlib_server
+
         run_stdlib_server(host="0.0.0.0", port=5000)
+
+
+if __name__ == "__main__":
+    main()

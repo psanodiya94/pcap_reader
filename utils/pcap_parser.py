@@ -1,16 +1,21 @@
 """PCAP file parser using scapy."""
 
+from __future__ import annotations
+
+from collections import Counter
+from typing import Any
+
 from scapy.all import rdpcap, IP, TCP, UDP, ICMP, DNS, ARP, IPv6, Raw
 from scapy.layers.http import HTTPRequest, HTTPResponse
 
 
-def parse_pcap(file_path):
+def parse_pcap(file_path: str) -> dict[str, Any]:
     """Parse a pcap file and return structured packet data."""
     packets = rdpcap(file_path)
-    parsed = []
+    parsed: list[dict[str, Any]] = []
 
     for i, pkt in enumerate(packets, start=1):
-        entry = {
+        entry: dict[str, Any] = {
             "no": i,
             "time": float(pkt.time),
             "length": len(pkt),
@@ -41,7 +46,11 @@ def parse_pcap(file_path):
             entry["src"] = pkt[ARP].psrc
             entry["dst"] = pkt[ARP].pdst
             entry["protocol"] = "ARP"
-            entry["info"] = f"Who has {pkt[ARP].pdst}? Tell {pkt[ARP].psrc}" if pkt[ARP].op == 1 else f"{pkt[ARP].psrc} is at {pkt[ARP].hwsrc}"
+            entry["info"] = (
+                f"Who has {pkt[ARP].pdst}? Tell {pkt[ARP].psrc}"
+                if pkt[ARP].op == 1
+                else f"{pkt[ARP].psrc} is at {pkt[ARP].hwsrc}"
+            )
         else:
             entry["src"] = pkt.src if hasattr(pkt, "src") else "N/A"
             entry["dst"] = pkt.dst if hasattr(pkt, "dst") else "N/A"
@@ -85,23 +94,15 @@ def parse_pcap(file_path):
     return {"packets": parsed, "summary": summary}
 
 
-def _build_summary(packets):
+def _build_summary(packets: list[dict[str, Any]]) -> dict[str, Any]:
     """Build a summary of the pcap data."""
-    protocols = {}
-    src_addrs = set()
-    dst_addrs = set()
-
-    for pkt in packets:
-        proto = pkt["protocol"]
-        protocols[proto] = protocols.get(proto, 0) + 1
-        if pkt["src"]:
-            src_addrs.add(pkt["src"])
-        if pkt["dst"]:
-            dst_addrs.add(pkt["dst"])
+    protocol_counts = Counter(pkt["protocol"] for pkt in packets)
+    src_addrs = {pkt["src"] for pkt in packets if pkt["src"]}
+    dst_addrs = {pkt["dst"] for pkt in packets if pkt["dst"]}
 
     return {
         "total_packets": len(packets),
-        "protocols": protocols,
+        "protocols": dict(protocol_counts),
         "unique_sources": len(src_addrs),
         "unique_destinations": len(dst_addrs),
         "source_addresses": sorted(src_addrs),

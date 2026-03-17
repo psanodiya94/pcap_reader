@@ -1,7 +1,11 @@
 """PCAP file parser using only Python standard library (struct)."""
 
-import struct
+from __future__ import annotations
+
 import socket
+import struct
+from collections import Counter
+from typing import Any
 
 
 # Pcap magic numbers
@@ -21,13 +25,13 @@ PROTO_UDP = 17
 PROTO_ICMPV6 = 58
 
 # TCP flags
-TCP_FLAGS = {
+TCP_FLAGS: dict[int, str] = {
     0x01: "F", 0x02: "S", 0x04: "R", 0x08: "P",
     0x10: "A", 0x20: "U", 0x40: "E", 0x80: "C",
 }
 
 
-def parse_pcap(file_path):
+def parse_pcap(file_path: str) -> dict[str, Any]:
     """Parse a pcap file using only the standard library."""
     with open(file_path, "rb") as f:
         data = f.read()
@@ -55,7 +59,7 @@ def parse_pcap(file_path):
     )
 
     offset = 24
-    parsed = []
+    parsed: list[dict[str, Any]] = []
     pkt_no = 0
 
     while offset < len(data):
@@ -75,7 +79,7 @@ def parse_pcap(file_path):
         offset += incl_len
         pkt_no += 1
 
-        entry = {
+        entry: dict[str, Any] = {
             "no": pkt_no,
             "time": ts_sec + ts_usec / 1_000_000,
             "length": orig_len,
@@ -112,7 +116,7 @@ def parse_pcap(file_path):
     return {"packets": parsed, "summary": summary}
 
 
-def _parse_ethernet(pkt_data, entry):
+def _parse_ethernet(pkt_data: bytes, entry: dict[str, Any]) -> None:
     """Parse an Ethernet frame."""
     dst_mac = _format_mac(pkt_data[0:6])
     src_mac = _format_mac(pkt_data[6:12])
@@ -133,7 +137,7 @@ def _parse_ethernet(pkt_data, entry):
         entry["info"] = f"EtherType: 0x{ethertype:04X}"
 
 
-def _parse_ipv4(payload, entry):
+def _parse_ipv4(payload: bytes, entry: dict[str, Any]) -> None:
     """Parse an IPv4 packet."""
     entry["layers"].append("IPv4")
     ihl = (payload[0] & 0x0F) * 4
@@ -145,7 +149,7 @@ def _parse_ipv4(payload, entry):
     _parse_transport(ip_payload, proto, entry)
 
 
-def _parse_ipv6(payload, entry):
+def _parse_ipv6(payload: bytes, entry: dict[str, Any]) -> None:
     """Parse an IPv6 packet."""
     entry["layers"].append("IPv6")
     next_header = payload[6]
@@ -156,7 +160,7 @@ def _parse_ipv6(payload, entry):
     _parse_transport(ip_payload, next_header, entry)
 
 
-def _parse_transport(payload, proto, entry):
+def _parse_transport(payload: bytes, proto: int, entry: dict[str, Any]) -> None:
     """Parse transport layer (TCP/UDP/ICMP)."""
     if proto == PROTO_TCP and len(payload) >= 20:
         entry["layers"].append("TCP")
@@ -213,7 +217,7 @@ def _parse_transport(payload, proto, entry):
         entry["info"] = f"IP Protocol: {proto}"
 
 
-def _parse_arp(payload, entry):
+def _parse_arp(payload: bytes, entry: dict[str, Any]) -> None:
     """Parse an ARP packet."""
     entry["layers"].append("ARP")
     entry["protocol"] = "ARP"
@@ -235,7 +239,7 @@ def _parse_arp(payload, entry):
         entry["info"] = f"ARP hw_size={hw_size} proto_size={proto_size}"
 
 
-def _try_parse_dns(payload, entry):
+def _try_parse_dns(payload: bytes, entry: dict[str, Any]) -> None:
     """Try to parse DNS query/response name from raw bytes."""
     if len(payload) < 12:
         return
@@ -250,9 +254,9 @@ def _try_parse_dns(payload, entry):
         entry["info"] = f"Response: {name}" if name else "DNS Response"
 
 
-def _read_dns_name(data, offset):
+def _read_dns_name(data: bytes, offset: int) -> str:
     """Read a DNS name from raw bytes (no pointer support for simplicity)."""
-    parts = []
+    parts: list[str] = []
     pos = offset
     for _ in range(64):  # safety limit
         if pos >= len(data):
@@ -271,21 +275,18 @@ def _read_dns_name(data, offset):
     return ".".join(parts) if parts else ""
 
 
-def _decode_tcp_flags(flags_val):
+def _decode_tcp_flags(flags_val: int) -> str:
     """Decode TCP flags integer to string."""
-    parts = []
-    for bit, char in sorted(TCP_FLAGS.items()):
-        if flags_val & bit:
-            parts.append(char)
+    parts = [char for bit, char in sorted(TCP_FLAGS.items()) if flags_val & bit]
     return "".join(parts) if parts else "none"
 
 
-def _format_mac(raw):
+def _format_mac(raw: bytes) -> str:
     """Format 6 bytes as a MAC address string."""
     return ":".join(f"{b:02x}" for b in raw)
 
 
-def _format_ipv6(raw):
+def _format_ipv6(raw: bytes) -> str:
     """Format 16 bytes as an IPv6 address."""
     try:
         return socket.inet_ntop(socket.AF_INET6, raw)
@@ -293,23 +294,15 @@ def _format_ipv6(raw):
         return ":".join(f"{raw[i]:02x}{raw[i+1]:02x}" for i in range(0, 16, 2))
 
 
-def _build_summary(packets):
+def _build_summary(packets: list[dict[str, Any]]) -> dict[str, Any]:
     """Build a summary of the pcap data."""
-    protocols = {}
-    src_addrs = set()
-    dst_addrs = set()
-
-    for pkt in packets:
-        proto = pkt["protocol"]
-        protocols[proto] = protocols.get(proto, 0) + 1
-        if pkt["src"]:
-            src_addrs.add(pkt["src"])
-        if pkt["dst"]:
-            dst_addrs.add(pkt["dst"])
+    protocol_counts = Counter(pkt["protocol"] for pkt in packets)
+    src_addrs = {pkt["src"] for pkt in packets if pkt["src"]}
+    dst_addrs = {pkt["dst"] for pkt in packets if pkt["dst"]}
 
     return {
         "total_packets": len(packets),
-        "protocols": protocols,
+        "protocols": dict(protocol_counts),
         "unique_sources": len(src_addrs),
         "unique_destinations": len(dst_addrs),
         "source_addresses": sorted(src_addrs),

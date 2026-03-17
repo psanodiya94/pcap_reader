@@ -8,8 +8,10 @@ and all scapy-supported formats). Falls back to stdlib struct-based
 reader for classic pcap when scapy is not installed.
 """
 
+from __future__ import annotations
+
 import struct
-import socket
+from typing import Any
 
 # Try to use scapy for raw byte extraction (handles pcapng + all formats)
 try:
@@ -38,7 +40,7 @@ PROTO_UDP = 17
 PROTO_ICMPV6 = 58
 
 
-def get_packet_hexdump(file_path, packet_no):
+def get_packet_hexdump(file_path: str, packet_no: int) -> dict[str, Any]:
     """Extract a single packet from a pcap file and return its hex dump.
 
     Returns a dict with:
@@ -62,7 +64,7 @@ def get_packet_hexdump(file_path, packet_no):
     }
 
 
-def _extract_packet_bytes(file_path, packet_no):
+def _extract_packet_bytes(file_path: str, packet_no: int) -> bytes | None:
     """Read the raw bytes of a specific packet from a pcap file.
 
     Uses scapy when available (supports pcap, pcapng, and all formats).
@@ -73,7 +75,7 @@ def _extract_packet_bytes(file_path, packet_no):
     return _extract_with_stdlib(file_path, packet_no)
 
 
-def _extract_with_scapy(file_path, packet_no):
+def _extract_with_scapy(file_path: str, packet_no: int) -> bytes | None:
     """Extract raw bytes using scapy (handles all pcap formats)."""
     packets = rdpcap(file_path)
 
@@ -84,7 +86,7 @@ def _extract_with_scapy(file_path, packet_no):
     return scapy_raw(pkt)
 
 
-def _extract_with_stdlib(file_path, packet_no):
+def _extract_with_stdlib(file_path: str, packet_no: int) -> bytes | None:
     """Extract raw bytes using stdlib struct (classic pcap only)."""
     with open(file_path, "rb") as f:
         data = f.read()
@@ -143,9 +145,9 @@ def _extract_with_stdlib(file_path, packet_no):
 # Section splitting — dissect raw bytes into header + payload sections
 # ---------------------------------------------------------------------------
 
-def _split_into_sections(raw_bytes):
+def _split_into_sections(raw_bytes: bytes) -> list[dict[str, Any]]:
     """Split raw packet bytes into logical sections (headers + payload)."""
-    sections = []
+    sections: list[dict[str, Any]] = []
 
     if len(raw_bytes) < 14:
         sections.append(_make_section("Raw Data", raw_bytes, 0))
@@ -175,9 +177,9 @@ def _split_into_sections(raw_bytes):
     return sections
 
 
-def _split_ethernet(raw_bytes):
+def _split_ethernet(raw_bytes: bytes) -> list[dict[str, Any]]:
     """Split an Ethernet frame into sections."""
-    sections = []
+    sections: list[dict[str, Any]] = []
     pos = 0
 
     # Ethernet Header (14 bytes)
@@ -211,9 +213,11 @@ def _split_ethernet(raw_bytes):
     return sections
 
 
-def _split_from_ip(data, base_offset, is_v6=False):
+def _split_from_ip(
+    data: bytes, base_offset: int, *, is_v6: bool = False,
+) -> list[dict[str, Any]]:
     """Split IP packet (v4 or v6) into header + transport + payload sections."""
-    sections = []
+    sections: list[dict[str, Any]] = []
 
     if is_v6:
         ipv6_header = data[:40]
@@ -245,7 +249,12 @@ def _split_from_ip(data, base_offset, is_v6=False):
     return sections
 
 
-def _split_transport(proto, data, base_offset, sections):
+def _split_transport(
+    proto: int,
+    data: bytes,
+    base_offset: int,
+    sections: list[dict[str, Any]],
+) -> tuple[bytes, int]:
     """Parse TCP/UDP/ICMP header and return remaining payload."""
     if proto == PROTO_TCP and len(data) >= 20:
         data_offset_byte = data[12] if len(data) > 12 else 0
@@ -281,7 +290,7 @@ def _split_transport(proto, data, base_offset, sections):
 # Formatting helpers
 # ---------------------------------------------------------------------------
 
-def _make_section(name, data, offset):
+def _make_section(name: str, data: bytes, offset: int) -> dict[str, Any]:
     """Create a section dict with hex dump lines."""
     return {
         "name": name,
@@ -291,13 +300,13 @@ def _make_section(name, data, offset):
     }
 
 
-def _format_hex_block(data, start_offset):
+def _format_hex_block(data: bytes, start_offset: int) -> list[str]:
     """Format bytes into hex dump lines (offset | hex bytes | ASCII).
 
     Each line covers 16 bytes, formatted like:
       0000  48 65 6C 6C 6F 20 57 6F  72 6C 64 21 00 00 00 00  |Hello World!....|
     """
-    lines = []
+    lines: list[str] = []
     for i in range(0, len(data), 16):
         chunk = data[i:i + 16]
         offset_str = f"{start_offset + i:04X}"

@@ -1,9 +1,13 @@
-from flask import Flask
-from config import Config
+from __future__ import annotations
+
 import os
 
+from flask import Flask
 
-def create_app():
+from config import Config
+
+
+def create_app() -> Flask:
     app = Flask(__name__)
     app.config.from_object(Config)
 

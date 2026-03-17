@@ -1,26 +1,33 @@
 """Flask routes for the PCAP Reader application."""
 
+from __future__ import annotations
+
+import logging
 import os
 import uuid
+from typing import Any
 
 from flask import Blueprint, current_app, jsonify, render_template, request, session
 from werkzeug.utils import secure_filename
+from werkzeug.wrappers import Response
 
 from utils import parse_pcap, SSHHandler, PCAP_BACKEND, SSH_BACKEND
 from utils.hex_dump import get_packet_hexdump
+
+logger = logging.getLogger(__name__)
 
 main_bp = Blueprint("main", __name__)
 
 # Simple in-memory store: session_id -> file_path
 # In production you'd use proper session/cache management.
-_active_files = {}
+_active_files: dict[str, str] = {}
 
 
-def _allowed_file(filename):
+def _allowed_file(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in current_app.config["ALLOWED_EXTENSIONS"]
 
 
-def _store_active_file(filepath):
+def _store_active_file(filepath: str) -> str:
     """Store the current pcap file and clean up any previous one."""
     sid = session.get("sid")
     if not sid:
@@ -36,7 +43,7 @@ def _store_active_file(filepath):
     return sid
 
 
-def _get_active_file():
+def _get_active_file() -> str | None:
     """Get the current active pcap file path for this session."""
     sid = session.get("sid")
     if not sid:
@@ -48,12 +55,12 @@ def _get_active_file():
 
 
 @main_bp.route("/")
-def index():
+def index() -> str:
     return render_template("index.html")
 
 
 @main_bp.route("/api/status", methods=["GET"])
-def status():
+def status() -> Response:
     """Return which backends are active."""
     return jsonify({
         "pcap_backend": PCAP_BACKEND,
@@ -62,7 +69,7 @@ def status():
 
 
 @main_bp.route("/api/upload", methods=["POST"])
-def upload_pcap():
+def upload_pcap() -> tuple[Response, int] | Response:
     """Handle local pcap file upload and parse it."""
     if "file" not in request.files:
         return jsonify({"error": "No file provided"}), 400
@@ -86,13 +93,14 @@ def upload_pcap():
         _store_active_file(filepath)
         return jsonify(result)
     except Exception as e:
+        logger.exception("Failed to parse uploaded pcap")
         if os.path.exists(filepath):
             os.remove(filepath)
-        return jsonify({"error": f"Failed to parse pcap: {str(e)}"}), 500
+        return jsonify({"error": f"Failed to parse pcap: {e!s}"}), 500
 
 
 @main_bp.route("/api/ssh/read", methods=["POST"])
-def ssh_read_pcap():
+def ssh_read_pcap() -> tuple[Response, int] | Response:
     """Read and parse a pcap file from a remote server via SSH."""
     data = request.get_json()
     if not data:
@@ -125,13 +133,14 @@ def ssh_read_pcap():
                 raise
 
     except FileNotFoundError as e:
-        return jsonify({"error": f"Remote file not found: {str(e)}"}), 404
+        return jsonify({"error": f"Remote file not found: {e!s}"}), 404
     except Exception as e:
-        return jsonify({"error": f"SSH operation failed: {str(e)}"}), 500
+        logger.exception("SSH read failed")
+        return jsonify({"error": f"SSH operation failed: {e!s}"}), 500
 
 
 @main_bp.route("/api/hexdump/<int:packet_no>", methods=["GET"])
-def hexdump(packet_no):
+def hexdump(packet_no: int) -> tuple[Response, int] | Response:
     """Return hex dump for a specific packet from the last parsed pcap."""
     filepath = _get_active_file()
     if not filepath:
@@ -143,11 +152,12 @@ def hexdump(packet_no):
     except ValueError as e:
         return jsonify({"error": str(e)}), 404
     except Exception as e:
-        return jsonify({"error": f"Hex dump failed: {str(e)}"}), 500
+        logger.exception("Hex dump failed")
+        return jsonify({"error": f"Hex dump failed: {e!s}"}), 500
 
 
 @main_bp.route("/api/ssh/tshark", methods=["POST"])
-def ssh_tshark():
+def ssh_tshark() -> tuple[Response, int] | Response:
     """Run tshark on a remote server and return output."""
     data = request.get_json()
     if not data:
@@ -176,11 +186,12 @@ def ssh_tshark():
     except FileNotFoundError as e:
         return jsonify({"error": str(e)}), 404
     except Exception as e:
-        return jsonify({"error": f"SSH tshark failed: {str(e)}"}), 500
+        logger.exception("SSH tshark failed")
+        return jsonify({"error": f"SSH tshark failed: {e!s}"}), 500
 
 
 @main_bp.route("/api/ssh/check-tshark", methods=["POST"])
-def check_tshark():
+def check_tshark() -> tuple[Response, int] | Response:
     """Check if tshark is available on a remote server."""
     data = request.get_json()
     if not data:
@@ -198,4 +209,5 @@ def check_tshark():
             return jsonify({"tshark_available": available})
 
     except Exception as e:
+        logger.exception("Check tshark failed")
         return jsonify({"error": str(e)}), 500

@@ -24,6 +24,12 @@
     --accent-icmp: #ef4444;
     --accent-arp: #ec4899;
     --accent-other: #64748b;
+    --radius-sm: 6px;
+    --radius-md: 8px;
+    --radius-lg: 10px;
+    --transition-fast: 150ms ease;
+    --transition-normal: 200ms ease;
+    --font-mono: "SF Mono", "Cascadia Code", "Fira Code", Consolas, monospace;
 }
 
 body {
@@ -32,6 +38,19 @@ body {
     color: var(--text);
     min-height: 100vh;
     line-height: 1.6;
+}
+
+/* Screen-reader only utility */
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
 }
 
 /* Header */
@@ -57,7 +76,7 @@ header .backend-info {
     color: var(--text-muted);
     font-size: 0.75rem;
     margin-top: 0.35rem;
-    font-family: monospace;
+    font-family: var(--font-mono);
     opacity: 0.7;
 }
 
@@ -83,13 +102,19 @@ main {
     padding: 0.75rem 1.5rem;
     cursor: pointer;
     font-size: 0.95rem;
-    transition: color 0.2s, border-color 0.2s;
+    transition: color var(--transition-normal), border-color var(--transition-normal);
     border-bottom: 2px solid transparent;
     margin-bottom: -2px;
 }
 
 .tab:hover {
     color: var(--text);
+}
+
+.tab:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: -2px;
+    border-radius: 4px 4px 0 0;
 }
 
 .tab.active {
@@ -104,13 +129,19 @@ main {
 
 .tab-content.active {
     display: block;
+    animation: fadeIn var(--transition-normal);
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
 }
 
 /* Forms */
 form {
     background: var(--surface);
     padding: 1.5rem;
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     border: 1px solid var(--border);
 }
 
@@ -138,20 +169,22 @@ label {
 
 input[type="text"],
 input[type="password"],
-input[type="number"] {
+input[type="number"],
+input[type="search"] {
     width: 100%;
     padding: 0.6rem 0.75rem;
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: var(--bg);
     color: var(--text);
     font-size: 0.9rem;
-    transition: border-color 0.2s;
+    transition: border-color var(--transition-normal), box-shadow var(--transition-normal);
 }
 
-input:focus {
+input:focus-visible {
     outline: none;
     border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
 }
 
 .file-input-wrapper {
@@ -162,11 +195,21 @@ input[type="file"] {
     width: 100%;
     padding: 0.6rem 0.75rem;
     border: 2px dashed var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: var(--bg);
     color: var(--text);
     cursor: pointer;
     font-size: 0.9rem;
+    transition: border-color var(--transition-normal);
+}
+
+input[type="file"]:hover {
+    border-color: var(--primary);
+}
+
+input[type="file"]:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
 }
 
 input[type="file"]::file-selector-button {
@@ -178,17 +221,26 @@ input[type="file"]::file-selector-button {
     cursor: pointer;
     margin-right: 0.75rem;
     font-size: 0.85rem;
+    transition: background var(--transition-fast);
+}
+
+input[type="file"]::file-selector-button:hover {
+    background: var(--primary-hover);
 }
 
 /* Buttons */
 .btn {
     padding: 0.65rem 1.5rem;
     border: none;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     font-size: 0.9rem;
     font-weight: 600;
     cursor: pointer;
-    transition: background 0.2s;
+    transition: background var(--transition-fast), transform var(--transition-fast);
+}
+
+.btn:active {
+    transform: scale(0.98);
 }
 
 .btn-primary {
@@ -201,9 +253,15 @@ input[type="file"]::file-selector-button {
     background: var(--primary-hover);
 }
 
+.btn-primary:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+}
+
 .btn-primary:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+    transform: none;
 }
 
 .btn-close {
@@ -213,6 +271,17 @@ input[type="file"]::file-selector-button {
     font-size: 1.25rem;
     cursor: pointer;
     padding: 0 0.25rem;
+    transition: color var(--transition-fast);
+}
+
+.btn-close:hover {
+    color: var(--text);
+}
+
+.btn-close:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+    border-radius: 4px;
 }
 
 /* Loading */
@@ -238,11 +307,25 @@ input[type="file"]::file-selector-button {
     to { transform: rotate(360deg); }
 }
 
+@media (prefers-reduced-motion: reduce) {
+    .spinner {
+        animation-duration: 1.5s;
+    }
+
+    .tab-content.active {
+        animation: none;
+    }
+
+    .protocol-bar-fill {
+        transition: none;
+    }
+}
+
 /* Error */
 .error-box {
     background: var(--error-bg);
     border: 1px solid var(--error);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     padding: 1rem 1.25rem;
     margin: 1rem 0;
     display: flex;
@@ -272,7 +355,7 @@ input[type="file"]::file-selector-button {
 .summary-panel {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     padding: 1.25rem;
     margin-bottom: 1.25rem;
 }
@@ -283,7 +366,8 @@ input[type="file"]::file-selector-button {
 }
 
 .summary-grid {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
     gap: 1rem;
     margin-bottom: 1rem;
 }
@@ -291,9 +375,8 @@ input[type="file"]::file-selector-button {
 .summary-card {
     background: var(--bg);
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     padding: 0.75rem 1rem;
-    flex: 1;
     text-align: center;
 }
 
@@ -361,22 +444,25 @@ input[type="file"]::file-selector-button {
     width: 100%;
     padding: 0.6rem 0.75rem;
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: var(--surface);
     color: var(--text);
     font-size: 0.9rem;
 }
 
-.filter-bar input:focus {
+.filter-bar input:focus-visible {
     outline: none;
     border-color: var(--primary);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
 }
 
 /* Packet Table */
 #packet-table-wrapper {
     overflow-x: auto;
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
+    max-height: 600px;
+    overflow-y: auto;
 }
 
 #packet-table {
@@ -389,6 +475,7 @@ input[type="file"]::file-selector-button {
     background: var(--surface);
     position: sticky;
     top: 0;
+    z-index: 1;
 }
 
 #packet-table th {
@@ -406,8 +493,18 @@ input[type="file"]::file-selector-button {
     white-space: nowrap;
 }
 
+#packet-table tbody tr {
+    cursor: pointer;
+    transition: background var(--transition-fast);
+}
+
 #packet-table tbody tr:hover {
     background: var(--surface-hover);
+}
+
+#packet-table tbody tr:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: -2px;
 }
 
 /* Protocol colors */
@@ -418,16 +515,11 @@ input[type="file"]::file-selector-button {
 .proto-icmp { color: var(--accent-icmp); }
 .proto-arp { color: var(--accent-arp); }
 
-#packet-table-wrapper {
-    max-height: 600px;
-    overflow-y: auto;
-}
-
 /* Tshark Output */
 #tshark-output-wrapper {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     padding: 1.25rem;
 }
 
@@ -435,41 +527,45 @@ input[type="file"]::file-selector-button {
     font-size: 0.8rem;
     color: var(--text-muted);
     margin-bottom: 0.75rem;
-    font-family: monospace;
+    font-family: var(--font-mono);
 }
 
 #tshark-output {
     background: var(--bg);
     padding: 1rem;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     font-size: 0.8rem;
     line-height: 1.5;
     overflow-x: auto;
     max-height: 600px;
     overflow-y: auto;
     white-space: pre;
-    font-family: "SF Mono", "Cascadia Code", "Fira Code", Consolas, monospace;
+    font-family: var(--font-mono);
 }
 
-/* Hex Dump Modal */
+/* Hex Dump Modal — uses <dialog> */
 .modal-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.7);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
+    border: none;
+    background: transparent;
     padding: 1rem;
+    max-width: 100vw;
+    max-height: 100vh;
+    width: 100%;
+    height: 100%;
+}
+
+.modal-overlay::backdrop {
+    background: rgba(0, 0, 0, 0.7);
 }
 
 .modal {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: var(--radius-lg);
     width: 100%;
     max-width: 900px;
     max-height: 85vh;
+    margin: auto;
     display: flex;
     flex-direction: column;
     box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
@@ -486,6 +582,7 @@ input[type="file"]::file-selector-button {
 .modal-header h3 {
     font-size: 1.05rem;
     font-weight: 600;
+    color: var(--text);
 }
 
 .modal-body {
@@ -523,14 +620,14 @@ input[type="file"]::file-selector-button {
 .hexdump-section-meta {
     font-size: 0.75rem;
     color: var(--text-muted);
-    font-family: monospace;
+    font-family: var(--font-mono);
 }
 
 .hexdump-lines {
     background: var(--bg);
     padding: 0.6rem 0.8rem;
-    border-radius: 6px;
-    font-family: "SF Mono", "Cascadia Code", "Fira Code", Consolas, monospace;
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
     font-size: 0.78rem;
     line-height: 1.55;
     overflow-x: auto;
@@ -543,11 +640,6 @@ input[type="file"]::file-selector-button {
 .hexdump-section:nth-child(3) .hexdump-lines { border-left-color: var(--accent-udp); }
 .hexdump-section:nth-child(4) .hexdump-lines { border-left-color: var(--accent-dns); }
 .hexdump-section:nth-child(5) .hexdump-lines { border-left-color: var(--accent-http); }
-
-/* Clickable rows */
-#packet-table tbody tr {
-    cursor: pointer;
-}
 
 /* Utility */
 .hidden {
@@ -576,7 +668,7 @@ footer {
     }
 
     .summary-grid {
-        flex-direction: column;
+        grid-template-columns: 1fr;
     }
 
     .tabs {

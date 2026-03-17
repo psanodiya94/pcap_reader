@@ -29,7 +29,7 @@ if [ "$1" = "--install-deps" ]; then
 
     echo "[3/3] Installing third-party dependencies inside virtual environment ..."
     pip install --upgrade pip
-    pip install -r requirements.txt
+    pip install -e ".[full]"
 
     echo ""
     echo "=== Setup complete (third-party packages installed in venv) ==="
