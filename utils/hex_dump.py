@@ -28,10 +28,11 @@ PCAP_MAGIC_NS_BE = 0x4D3CB2A1
 PCAPNG_MAGIC = 0x0A0D0D0A
 
 # Ethernet types
-ETHERTYPE_IP = 0x0800
+ETHERTYPE_IP   = 0x0800
 ETHERTYPE_IPV6 = 0x86DD
-ETHERTYPE_ARP = 0x0806
+ETHERTYPE_ARP  = 0x0806
 ETHERTYPE_VLAN = 0x8100
+ETHERTYPE_ECPRI = 0xAEFE   # O-RAN WG4 eCPRI fronthaul
 
 # IP protocols
 PROTO_ICMP = 1
@@ -373,6 +374,162 @@ def _icmpv6_fields(data: bytes, base: int) -> list[dict[str, Any]]:
     ]
 
 
+_ECPRI_MSG_NAMES: dict[int, str] = {
+    0x00: "IQ Data",
+    0x01: "Bit Sequence",
+    0x02: "Real-Time Control Data",
+    0x03: "Generic Data Transfer",
+    0x04: "Remote Memory Access",
+    0x05: "One-Way Delay Measurement",
+    0x06: "Remote Reset",
+    0x07: "Event Indication",
+}
+
+
+def _ecpri_common_fields(data: bytes, base: int) -> list[dict[str, Any]]:
+    """eCPRI Common Header — 4 bytes.
+
+    Byte 0: ecpriVersion(4) | ecpriReserved(3) | ecpriC(1)
+    Byte 1: ecpriMessage
+    Bytes 2-3: ecpriPayload (size)
+    """
+    if len(data) < 4:
+        return []
+    b0 = data[0]
+    version  = (b0 >> 4) & 0xF
+    c_bit    = b0 & 0x1
+    msg_type = data[1]
+    payload_size = struct.unpack("!H", data[2:4])[0]
+    msg_name = _ECPRI_MSG_NAMES.get(msg_type, f"0x{msg_type:02X}")
+    return [
+        {"name": f"ecpriVersion ({version}) + Reserved + ecpriC ({c_bit})",
+         "offset": base,     "length": 1, "value": f"0x{b0:02X}"},
+        {"name": "ecpriMessage (Message Type)",
+         "offset": base + 1, "length": 1, "value": f"{msg_name} (0x{msg_type:02X})"},
+        {"name": "ecpriPayload (Payload Size)",
+         "offset": base + 2, "length": 2, "value": f"{payload_size} bytes"},
+    ]
+
+
+def _ecpri_transport_fields(data: bytes, base: int) -> list[dict[str, Any]]:
+    """eCPRI IQ Data Transport Header — bytes 4-7.
+
+    Bytes 4-5: PC_ID / eAxC_ID
+    Byte  6:   E-bit (MSB) + unused
+    Byte  7:   Sequence Number
+    """
+    if len(data) < 4:
+        return []
+    pc_id  = struct.unpack("!H", data[0:2])[0]
+    e_bit  = (data[2] >> 7) & 0x1
+    seq_id = data[3]
+    return [
+        {"name": "PC_ID / eAxC_ID",
+         "offset": base,     "length": 2, "value": f"0x{pc_id:04X}"},
+        {"name": f"E-bit ({e_bit}) + Sequence ID",
+         "offset": base + 2, "length": 2,
+         "value": f"E={e_bit} ({'last' if e_bit else 'not-last'}), SeqID={seq_id}"},
+    ]
+
+
+def _oran_section_fields(data: bytes, base: int) -> list[dict[str, Any]]:
+    """O-RAN U-plane Section Header — bytes 8-11.
+
+    Byte  8: dataDirection(1) | payloadVersion(3) | filterIndex(4)
+    Byte  9: frameId (8 bits)
+    Byte 10: subframeId(4) | slotId[5:2](4)
+    Byte 11: slotId[1:0](2) | symbolId(6)
+
+    slotId is 6 bits split across bytes 10 and 11.
+    """
+    if len(data) < 4:
+        return []
+    b8 = data[0]
+    data_dir  = "DL" if (b8 >> 7) & 0x1 == 0 else "UL"
+    pld_ver   = (b8 >> 4) & 0x7
+    flt_idx   = b8 & 0xF
+
+    frame_id  = data[1]
+
+    b10 = data[2]
+    subframe_id = (b10 >> 4) & 0xF
+    slot_hi     = b10 & 0xF          # slotId bits [5:2]
+
+    b11 = data[3]
+    slot_lo   = (b11 >> 6) & 0x3    # slotId bits [1:0]
+    symbol_id = b11 & 0x3F
+    slot_id   = (slot_hi << 2) | slot_lo
+
+    return [
+        {"name": "dataDirection + payloadVersion + filterIndex",
+         "offset": base,     "length": 1,
+         "value": f"dir={data_dir}, payloadVer={pld_ver}, filterIdx={flt_idx}"},
+        {"name": "frameId",
+         "offset": base + 1, "length": 1, "value": str(frame_id)},
+        {"name": f"subframeId ({subframe_id}) + slotId[5:2] ({slot_hi})",
+         "offset": base + 2, "length": 1,
+         "value": f"subframe={subframe_id},  slotId[5:2]={slot_hi}"},
+        {"name": f"slotId[1:0] ({slot_lo}) + symbolId ({symbol_id})  →  slot={slot_id}",
+         "offset": base + 3, "length": 1,
+         "value": f"slot={slot_id} (6-bit),  sym={symbol_id}"},
+    ]
+
+
+def _split_ecpri(data: bytes, base: int) -> list[dict[str, Any]]:
+    """Split eCPRI frame into up to 4 sections with per-field offsets.
+
+    Sections produced (when all bytes are present):
+      1. eCPRI Common Header       — 4 bytes
+      2. eCPRI Transport Header    — 4 bytes  (IQ Data only)
+      3. O-RAN U-Plane Sec Header  — 4 bytes  (IQ Data only)
+      4. IQ Payload / Data         — remainder
+    """
+    sections: list[dict[str, Any]] = []
+    if len(data) < 4:
+        sections.append(_make_section("eCPRI Data", data, base))
+        return sections
+
+    msg_type = data[1]
+
+    # ── Section 1: eCPRI Common Header (4 bytes) ──────────────────────────
+    sections.append(_make_section(
+        "eCPRI Common Header", data[:4], base,
+        fields=_ecpri_common_fields(data[:4], base),
+    ))
+
+    if msg_type != 0x00 or len(data) < 8:
+        # Not IQ Data or too short — dump the rest as payload
+        if len(data) > 4:
+            sections.append(_make_section("eCPRI Payload", data[4:], base + 4,
+                                          payload_relative=True))
+        return sections
+
+    # ── Section 2: eCPRI Transport Header (bytes 4-7) ─────────────────────
+    sections.append(_make_section(
+        "eCPRI Transport Header (PC_ID / SeqID)", data[4:8], base + 4,
+        fields=_ecpri_transport_fields(data[4:8], base + 4),
+    ))
+
+    if len(data) < 12:
+        if len(data) > 8:
+            sections.append(_make_section("IQ Payload", data[8:], base + 8,
+                                          payload_relative=True))
+        return sections
+
+    # ── Section 3: O-RAN U-Plane Section Header (bytes 8-11) ──────────────
+    sections.append(_make_section(
+        "O-RAN U-Plane Section Header", data[8:12], base + 8,
+        fields=_oran_section_fields(data[8:12], base + 8),
+    ))
+
+    # ── Section 4: IQ Payload (everything after byte 11) ──────────────────
+    if len(data) > 12:
+        sections.append(_make_section("IQ Payload", data[12:], base + 12,
+                                      payload_relative=True))
+
+    return sections
+
+
 # ---------------------------------------------------------------------------
 # Section splitting — dissect raw bytes into header + payload sections
 # ---------------------------------------------------------------------------
@@ -391,6 +548,7 @@ def _split_into_sections(raw_bytes: bytes) -> list[dict[str, Any]]:
     # Heuristic: if ethertype is a known value, treat as Ethernet
     known_ethertypes = {
         ETHERTYPE_IP, ETHERTYPE_IPV6, ETHERTYPE_ARP, ETHERTYPE_VLAN,
+        ETHERTYPE_ECPRI,
     }
 
     if ethertype in known_ethertypes or ethertype > 0x0600:
@@ -444,6 +602,8 @@ def _split_ethernet(raw_bytes: bytes) -> list[dict[str, Any]]:
         if len(remaining) > 28:
             sections.append(_make_section("Payload", remaining[28:], pos + 28,
                                           payload_relative=True))
+    elif ethertype == ETHERTYPE_ECPRI:
+        sections.extend(_split_ecpri(remaining, pos))
     elif remaining:
         sections.append(_make_section("Payload", remaining, pos,
                                       payload_relative=True))
