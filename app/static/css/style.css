@@ -522,6 +522,28 @@ input[type="file"]::file-selector-button:hover {
 .col-len  { font-family: var(--font-mono); text-align: right; white-space: nowrap; }
 .len-trunc { color: var(--accent-icmp); font-size: 0.85em; }
 
+/* pcap global-header metadata bar */
+.file-header-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin-top: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    background: color-mix(in srgb, var(--surface) 80%, var(--border) 20%);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+.fh-chip {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.15rem 0.5rem;
+    font-family: var(--font-mono);
+    white-space: nowrap;
+}
+
 /* Tshark Output */
 #tshark-output-wrapper {
     background: var(--surface);

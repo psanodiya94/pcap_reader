@@ -77,6 +77,8 @@ document.addEventListener("DOMContentLoaded", () => {
         filterBar.classList.add("hidden");
         packetTableWrapper.classList.add("hidden");
         tsharkOutputWrapper.classList.add("hidden");
+        const fhBar = document.getElementById("file-header-bar");
+        if (fhBar) fhBar.classList.add("hidden");
     }
 
     /**
@@ -253,6 +255,31 @@ document.addEventListener("DOMContentLoaded", () => {
                 `;
                 protocolBars.appendChild(bar);
             });
+
+        // File header metadata bar
+        const fhBar = document.getElementById("file-header-bar");
+        const fh = data.file_header ?? {};
+        if (fhBar) {
+            if (Object.keys(fh).length) {
+                const chips = [
+                    fh.magic      ? `Magic: ${fh.magic}`        : null,
+                    fh.version    ? `v${fh.version}`             : null,
+                    fh.link_type  ? `Link: ${fh.link_type}`      : null,
+                    fh.snaplen    ? `SnapLen: ${fh.snaplen}`      : null,
+                    fh.timestamp_unit
+                        ? `TS: ${fh.timestamp_unit}` : null,
+                    fh.thiszone != null && fh.thiszone !== 0
+                        ? `TZ offset: ${fh.thiszone}s` : null,
+                    `Timestamps: TAI−37 s → UTC`,
+                ].filter(Boolean);
+                fhBar.innerHTML = chips
+                    .map((c) => `<span class="fh-chip">${escapeHtml(c)}</span>`)
+                    .join("");
+                fhBar.classList.remove("hidden");
+            } else {
+                fhBar.classList.add("hidden");
+            }
+        }
 
         renderPacketTable(allPackets);
 
