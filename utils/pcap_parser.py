@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import struct
 from collections import Counter
+from decimal import Decimal
 from typing import Any
 
 from scapy.all import rdpcap, IP, TCP, UDP, ICMP, DNS, ARP, IPv6, Raw, Ether
@@ -22,6 +24,71 @@ _ECPRI_MSG_TYPES: dict[int, str] = {
     0x06: "Remote Reset",
     0x07: "Event Indication",
 }
+
+
+# Pcap magic numbers
+_PCAP_MAGIC_LE    = 0xA1B2C3D4  # microsecond, little-endian
+_PCAP_MAGIC_BE    = 0xD4C3B2A1  # microsecond, big-endian
+_PCAP_MAGIC_NS_LE = 0xA1B23C4D  # nanosecond,  little-endian  ← TsNSec format
+_PCAP_MAGIC_NS_BE = 0x4D3CB2A1  # nanosecond,  big-endian
+
+# TAI–UTC leap-second offset (seconds to subtract from TAI to obtain UTC).
+# PTP/IEEE 1588 clocks run on TAI; this value has been 37 s since Jan 2017.
+# Stored as a module constant so it is easy to update if a new leap second
+# is announced.
+_TAI_UTC_OFFSET = 37
+
+_LINK_TYPE_NAMES: dict[int, str] = {
+    0: "NULL", 1: "Ethernet", 6: "Token Ring", 10: "FDDI",
+    101: "Raw IP", 105: "IEEE 802.11 (Wi-Fi)", 113: "Linux SLL",
+    127: "IEEE 802.11 RadioTap", 143: "IEEE 802.11 AVS",
+}
+
+
+def _read_pcap_global_header(file_path: str) -> dict[str, Any]:
+    """Parse the 24-byte pcap global header.
+
+    Layout (little-endian for normal pcap):
+      Bytes  0- 3: MagicNumber  (uint32)
+      Bytes  4- 5: VersionMajor (uint16)
+      Bytes  6- 7: VersionMinor (uint16)
+      Bytes  8-11: ThisZone     (int32)  — seconds to add to ts to get UTC
+      Bytes 12-15: SigFigs      (uint32) — timestamp accuracy (usually 0)
+      Bytes 16-19: SnapLen      (uint32) — max captured bytes per packet
+      Bytes 20-23: Network      (uint32) — link-layer type (DLT_*)
+    """
+    try:
+        with open(file_path, "rb") as f:
+            raw = f.read(24)
+    except OSError:
+        return {}
+
+    if len(raw) < 24:
+        return {}
+
+    magic = struct.unpack("<I", raw[:4])[0]
+    if magic in (_PCAP_MAGIC_LE, _PCAP_MAGIC_NS_LE):
+        endian = "<"
+    elif magic in (_PCAP_MAGIC_BE, _PCAP_MAGIC_NS_BE):
+        endian = ">"
+    else:
+        return {}  # pcapng or unrecognised format
+
+    ns_precision = magic in (_PCAP_MAGIC_NS_LE, _PCAP_MAGIC_NS_BE)
+    _, vmaj, vmin, thiszone, sigfigs, snaplen, network = struct.unpack(
+        f"{endian}IHHiIII", raw
+    )
+    return {
+        "magic": f"0x{magic:08X}",
+        "version": f"{vmaj}.{vmin}",
+        "thiszone": int(thiszone),
+        "sigfigs": int(sigfigs),
+        "snaplen": int(snaplen),
+        "network": int(network),
+        "link_type": _LINK_TYPE_NAMES.get(network, f"DLT_{network}"),
+        "ns_precision": ns_precision,
+        "timestamp_unit": "nanoseconds" if ns_precision else "microseconds",
+    }
 
 
 def _parse_ecpri(raw_bytes: bytes) -> dict[str, Any] | None:
@@ -87,21 +154,35 @@ def _parse_ecpri(raw_bytes: bytes) -> dict[str, Any] | None:
 
 def parse_pcap(file_path: str) -> dict[str, Any]:
     """Parse a pcap file and return structured packet data."""
+    file_header = _read_pcap_global_header(file_path)
     packets = rdpcap(file_path)
     parsed: list[dict[str, Any]] = []
+
+    # thiszone: seconds to ADD to raw timestamp to get UTC.
+    # If the capture is PTP/TAI-based (common in eCPRI/5G-RAN captures) the
+    # raw TsSec value is TAI time, which runs _TAI_UTC_OFFSET seconds AHEAD
+    # of UTC.  Subtracting the leap-second offset converts TAI → UTC.
+    # thiszone in the global header can override this (standard pcap allows
+    # negative values to signal a UTC correction, but most captures leave it 0).
+    thiszone: int = file_header.get("thiszone", 0)
 
     for i, pkt in enumerate(packets, start=1):
         incl_len = len(bytes(pkt))
         orig_len = int(getattr(pkt, "wirelen", incl_len) or incl_len)
 
-        ts = float(pkt.time)
-        ts_sec = int(ts)
-        ts_nsec = int(round((ts - ts_sec) * 1_000_000_000))
+        # Use Decimal arithmetic to avoid float precision loss on nanosecond pcap.
+        t: Decimal = Decimal(str(pkt.time))
+        ts_sec_raw  = int(t)
+        ts_nsec     = int((t - ts_sec_raw) * Decimal("1000000000"))
+
+        # Apply global-header timezone correction then PTP TAI→UTC correction.
+        ts_sec_utc  = ts_sec_raw + thiszone - _TAI_UTC_OFFSET
 
         entry: dict[str, Any] = {
             "no": i,
-            "time": ts,
-            "ts_sec": ts_sec,
+            "time": float(t),
+            "ts_sec": ts_sec_utc,       # UTC seconds (corrected)
+            "ts_sec_raw": ts_sec_raw,   # raw TAI seconds as stored in the file
             "ts_nsec": ts_nsec,
             "length": incl_len,
             "orig_len": orig_len,
@@ -199,7 +280,7 @@ def parse_pcap(file_path: str) -> dict[str, Any]:
         parsed.append(entry)
 
     summary = _build_summary(parsed)
-    return {"packets": parsed, "summary": summary}
+    return {"packets": parsed, "summary": summary, "file_header": file_header}
 
 
 def _build_summary(packets: list[dict[str, Any]]) -> dict[str, Any]:
