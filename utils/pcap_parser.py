@@ -94,27 +94,31 @@ def _read_pcap_global_header(file_path: str) -> dict[str, Any]:
 
 
 def _get_ecpri_payload(pkt: Any) -> bytes | None:
-    """Return the raw eCPRI payload bytes for a packet, handling VLAN tags.
+    """Return raw eCPRI payload bytes, stripping Ethernet + any VLAN tags.
 
-    5G-RAN fronthaul frames are usually VLAN-tagged (single 802.1Q or double
-    802.1ad QinQ).  Walking the scapy layer chain handles all three cases:
-      - Untagged:            Ether → Raw(eCPRI)
-      - Single-tagged 802.1Q: Ether(0x8100) → Dot1Q(0xAEFE) → Raw(eCPRI)
-      - Double-tagged QinQ:   Ether(0x88A8) → Dot1Q(0x8100) → Dot1Q(0xAEFE) → Raw(eCPRI)
+    Uses raw bytes instead of scapy layers to avoid any scapy dissection
+    quirks.  Handles untagged, single 802.1Q, and double-tagged QinQ frames.
+
+      Untagged:  [dst(6)][src(6)][0xAEFE(2)] → pos 14
+      802.1Q:    [dst(6)][src(6)][0x8100(2)][TCI(2)][0xAEFE(2)] → pos 18
+      QinQ:      [dst(6)][src(6)][0x88A8(2)][TCI(2)][0x8100(2)][TCI(2)][0xAEFE(2)] → pos 22
     """
-    if not pkt.haslayer(Ether):
+    raw = bytes(pkt)
+    if len(raw) < 14:
         return None
-    layer = pkt[Ether]
-    # Walk through VLAN layers until we find eCPRI or a non-VLAN EtherType
-    while layer is not None:
-        et = layer.type if hasattr(layer, "type") else None
+
+    pos = 12  # offset of the first EtherType field
+    for _ in range(4):  # allow up to 3 VLAN tags + inner EtherType
+        if pos + 2 > len(raw):
+            return None
+        et = struct.unpack("!H", raw[pos: pos + 2])[0]
+        pos += 2  # move past the EtherType
         if et == _ECPRI_ETHERTYPE:
-            return bytes(layer.payload)
-        if et in (_ETHERTYPE_VLAN, _ETHERTYPE_QINQ) and layer.payload:
-            # Descend into the inner VLAN/S-VLAN layer (scapy uses Dot1Q for both)
-            layer = layer.payload if isinstance(layer.payload, (Ether, Dot1Q)) else None
-        else:
-            break
+            return raw[pos:] if pos < len(raw) else None
+        if et in (_ETHERTYPE_VLAN, _ETHERTYPE_QINQ):
+            pos += 2  # skip the 2-byte TCI (PCP/DEI/VID)
+            continue
+        break  # different protocol — not eCPRI
     return None
 
 
