@@ -7,11 +7,13 @@ from collections import Counter
 from decimal import Decimal
 from typing import Any
 
-from scapy.all import rdpcap, IP, TCP, UDP, ICMP, DNS, ARP, IPv6, Raw, Ether
+from scapy.all import rdpcap, IP, TCP, UDP, ICMP, DNS, ARP, IPv6, Raw, Ether, Dot1Q
 from scapy.layers.http import HTTPRequest, HTTPResponse
 
 # eCPRI EtherType (O-RAN WG4 C/U-plane)
 _ECPRI_ETHERTYPE = 0xAEFE
+_ETHERTYPE_VLAN  = 0x8100   # 802.1Q
+_ETHERTYPE_QINQ  = 0x88A8   # 802.1ad S-VLAN (double-tagged)
 
 # eCPRI message type names
 _ECPRI_MSG_TYPES: dict[int, str] = {
@@ -89,6 +91,31 @@ def _read_pcap_global_header(file_path: str) -> dict[str, Any]:
         "ns_precision": ns_precision,
         "timestamp_unit": "nanoseconds" if ns_precision else "microseconds",
     }
+
+
+def _get_ecpri_payload(pkt: Any) -> bytes | None:
+    """Return the raw eCPRI payload bytes for a packet, handling VLAN tags.
+
+    5G-RAN fronthaul frames are usually VLAN-tagged (single 802.1Q or double
+    802.1ad QinQ).  Walking the scapy layer chain handles all three cases:
+      - Untagged:            Ether → Raw(eCPRI)
+      - Single-tagged 802.1Q: Ether(0x8100) → Dot1Q(0xAEFE) → Raw(eCPRI)
+      - Double-tagged QinQ:   Ether(0x88A8) → Dot1Q(0x8100) → Dot1Q(0xAEFE) → Raw(eCPRI)
+    """
+    if not pkt.haslayer(Ether):
+        return None
+    layer = pkt[Ether]
+    # Walk through VLAN layers until we find eCPRI or a non-VLAN EtherType
+    while layer is not None:
+        et = layer.type if hasattr(layer, "type") else None
+        if et == _ECPRI_ETHERTYPE:
+            return bytes(layer.payload)
+        if et in (_ETHERTYPE_VLAN, _ETHERTYPE_QINQ) and layer.payload:
+            # Descend into the inner VLAN/S-VLAN layer (scapy uses Dot1Q for both)
+            layer = layer.payload if isinstance(layer.payload, (Ether, Dot1Q)) else None
+        else:
+            break
+    return None
 
 
 def _parse_ecpri(raw_bytes: bytes) -> dict[str, Any] | None:
@@ -219,12 +246,26 @@ def parse_pcap(file_path: str) -> dict[str, Any]:
                 else f"{pkt[ARP].psrc} is at {pkt[ARP].hwsrc}"
             )
         else:
-            entry["src"] = pkt.src if hasattr(pkt, "src") else "N/A"
-            entry["dst"] = pkt.dst if hasattr(pkt, "dst") else "N/A"
+            # Use Ethernet MAC addresses; annotate with VLAN ID(s) if present
+            src_mac = pkt.src if hasattr(pkt, "src") else "N/A"
+            dst_mac = pkt.dst if hasattr(pkt, "dst") else "N/A"
+            if pkt.haslayer(Dot1Q):
+                vlan_ids: list[int] = []
+                layer = pkt[Dot1Q]
+                while layer and hasattr(layer, "vlan"):
+                    vlan_ids.append(layer.vlan)
+                    layer = layer.payload if isinstance(layer.payload, Dot1Q) else None
+                vlan_str = "/".join(str(v) for v in vlan_ids)
+                entry["src"] = f"{src_mac} (VLAN {vlan_str})"
+                entry["dst"] = dst_mac
+            else:
+                entry["src"] = src_mac
+                entry["dst"] = dst_mac
 
-        # eCPRI detection (EtherType 0xAEFE, O-RAN WG4 fronthaul)
-        if pkt.haslayer(Ether) and pkt[Ether].type == _ECPRI_ETHERTYPE:
-            ecpri = _parse_ecpri(bytes(pkt[Ether].payload))
+        # eCPRI detection — handles untagged, 802.1Q VLAN, and QinQ double-tagged
+        _ecpri_raw = _get_ecpri_payload(pkt)
+        if _ecpri_raw is not None:
+            ecpri = _parse_ecpri(_ecpri_raw)
             if ecpri:
                 entry["ecpri"] = ecpri
                 entry["protocol"] = "eCPRI"
