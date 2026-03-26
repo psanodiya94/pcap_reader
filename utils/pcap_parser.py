@@ -5,8 +5,84 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
-from scapy.all import rdpcap, IP, TCP, UDP, ICMP, DNS, ARP, IPv6, Raw
+from scapy.all import rdpcap, IP, TCP, UDP, ICMP, DNS, ARP, IPv6, Raw, Ether
 from scapy.layers.http import HTTPRequest, HTTPResponse
+
+# eCPRI EtherType (O-RAN WG4 C/U-plane)
+_ECPRI_ETHERTYPE = 0xAEFE
+
+# eCPRI message type names
+_ECPRI_MSG_TYPES: dict[int, str] = {
+    0x00: "IQ Data",
+    0x01: "Bit Sequence",
+    0x02: "Real-Time Control Data",
+    0x03: "Generic Data Transfer",
+    0x04: "Remote Memory Access",
+    0x05: "One-Way Delay Measurement",
+    0x06: "Remote Reset",
+    0x07: "Event Indication",
+}
+
+
+def _parse_ecpri(raw_bytes: bytes) -> dict[str, Any] | None:
+    """Parse eCPRI common header and O-RAN U-plane section header.
+
+    Byte layout (O-RAN.WG4.CUS spec):
+      Byte 0: ecpriVersion(4) | ecpriReserved(3) | ecpriC(1)
+      Byte 1: ecpriMessage  (message type)
+      Bytes 2-3: ecpriPayload (payload size in bytes)
+    For IQ Data (msg type 0x00) — transport header continues:
+      Bytes 4-5: PC_ID / eAxC_ID
+      Bytes 6-7: Sequence ID
+    O-RAN section header (octets 9-12, 0-indexed bytes 8-11):
+      Byte  8: dataDirection(1) | payloadVersion(3) | filterIndex(4)
+      Byte  9: frameId (8 bits)
+      Byte 10: subframeId(4) | slotId[5:2](4)
+      Byte 11: slotId[1:0](2) | symbolId(6)
+    """
+    if len(raw_bytes) < 4:
+        return None
+
+    byte0 = raw_bytes[0]
+    ecpri_version = (byte0 >> 4) & 0xF
+    ecpri_c = byte0 & 0x1
+    ecpri_msg = raw_bytes[1]
+    ecpri_payload_size = (raw_bytes[2] << 8) | raw_bytes[3]
+
+    result: dict[str, Any] = {
+        "ecpri_version": ecpri_version,
+        "ecpri_concatenation": bool(ecpri_c),
+        "ecpri_message_type": ecpri_msg,
+        "ecpri_message_name": _ECPRI_MSG_TYPES.get(ecpri_msg, f"0x{ecpri_msg:02X}"),
+        "ecpri_payload_size": ecpri_payload_size,
+    }
+
+    # IQ Data message — parse transport header + O-RAN section header
+    if ecpri_msg == 0x00 and len(raw_bytes) >= 8:
+        pc_id = (raw_bytes[4] << 8) | raw_bytes[5]
+        seq_id = (raw_bytes[6] << 8) | raw_bytes[7]
+        result["pc_id"] = pc_id
+        result["seq_id"] = seq_id & 0x00FF        # lower 8 bits = sequence number
+        result["e_bit"] = (raw_bytes[6] >> 7) & 0x1  # first-last indication
+
+        if len(raw_bytes) >= 12:
+            b8 = raw_bytes[8]
+            result["data_direction"] = "DL" if (b8 >> 7) & 0x1 == 0 else "UL"
+            result["payload_version"] = (b8 >> 4) & 0x7
+            result["filter_index"] = b8 & 0xF
+
+            result["frame_id"] = raw_bytes[9]
+
+            b10 = raw_bytes[10]
+            result["subframe_id"] = (b10 >> 4) & 0xF
+            slot_hi = b10 & 0xF  # slotId bits [5:2]
+
+            b11 = raw_bytes[11]
+            slot_lo = (b11 >> 6) & 0x3   # slotId bits [1:0]
+            result["slot_id"] = (slot_hi << 2) | slot_lo
+            result["symbol_id"] = b11 & 0x3F
+
+    return result
 
 
 def parse_pcap(file_path: str) -> dict[str, Any]:
@@ -15,10 +91,20 @@ def parse_pcap(file_path: str) -> dict[str, Any]:
     parsed: list[dict[str, Any]] = []
 
     for i, pkt in enumerate(packets, start=1):
+        incl_len = len(bytes(pkt))
+        orig_len = int(getattr(pkt, "wirelen", incl_len) or incl_len)
+
+        ts = float(pkt.time)
+        ts_sec = int(ts)
+        ts_nsec = int(round((ts - ts_sec) * 1_000_000_000))
+
         entry: dict[str, Any] = {
             "no": i,
-            "time": float(pkt.time),
-            "length": len(pkt),
+            "time": ts,
+            "ts_sec": ts_sec,
+            "ts_nsec": ts_nsec,
+            "length": incl_len,
+            "orig_len": orig_len,
             "src": "",
             "dst": "",
             "protocol": "",
@@ -54,6 +140,28 @@ def parse_pcap(file_path: str) -> dict[str, Any]:
         else:
             entry["src"] = pkt.src if hasattr(pkt, "src") else "N/A"
             entry["dst"] = pkt.dst if hasattr(pkt, "dst") else "N/A"
+
+        # eCPRI detection (EtherType 0xAEFE, O-RAN WG4 fronthaul)
+        if pkt.haslayer(Ether) and pkt[Ether].type == _ECPRI_ETHERTYPE:
+            ecpri = _parse_ecpri(bytes(pkt[Ether].payload))
+            if ecpri:
+                entry["ecpri"] = ecpri
+                entry["protocol"] = "eCPRI"
+                if ecpri.get("frame_id") is not None:
+                    entry["info"] = (
+                        f"{ecpri['ecpri_message_name']} "
+                        f"{ecpri['data_direction']} "
+                        f"frame={ecpri['frame_id']} "
+                        f"subframe={ecpri['subframe_id']} "
+                        f"slot={ecpri['slot_id']} "
+                        f"sym={ecpri['symbol_id']} "
+                        f"PC_ID=0x{ecpri['pc_id']:04X}"
+                    )
+                else:
+                    entry["info"] = (
+                        f"{ecpri['ecpri_message_name']} "
+                        f"payload_size={ecpri['ecpri_payload_size']}"
+                    )
 
         # Protocol detection
         if not entry["protocol"]:

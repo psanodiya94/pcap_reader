@@ -234,6 +234,7 @@ document.addEventListener("DOMContentLoaded", () => {
             HTTP: "var(--accent-http)",
             ICMP: "var(--accent-icmp)",
             ARP: "var(--accent-arp)",
+            eCPRI: "var(--accent-ecpri)",
         };
 
         Object.entries(protocols)
@@ -267,17 +268,24 @@ document.addEventListener("DOMContentLoaded", () => {
         const fragment = document.createDocumentFragment();
 
         for (const pkt of packets) {
-            const protoClass = `proto-${pkt.protocol.toLowerCase()}`;
+            const protoClass = `proto-${pkt.protocol.toLowerCase().replace(/[^a-z0-9]/g, "")}`;
+            const timeStr = pkt.ts_sec !== undefined
+                ? `${pkt.ts_sec}.${String(pkt.ts_nsec ?? 0).padStart(9, "0")}`
+                : pkt.time.toFixed(6);
+            const lenStr = (pkt.orig_len && pkt.orig_len !== pkt.length)
+                ? `<span title="Captured: ${pkt.length} bytes, Original: ${pkt.orig_len} bytes (truncated)">${pkt.length}<span class="len-trunc">/${pkt.orig_len}</span></span>`
+                : pkt.length;
             const tr = document.createElement("tr");
             tr.tabIndex = 0;
             tr.setAttribute("data-pkt-no", pkt.no);
             tr.setAttribute("title", "Click to view hex dump");
             tr.innerHTML = `
                 <td>${pkt.no}</td>
+                <td class="col-time">${escapeHtml(timeStr)}</td>
                 <td>${escapeHtml(pkt.src)}</td>
                 <td>${escapeHtml(pkt.dst)}</td>
                 <td class="${protoClass}"><strong>${escapeHtml(pkt.protocol)}</strong></td>
-                <td>${pkt.length}</td>
+                <td class="col-len">${lenStr}</td>
                 <td>${escapeHtml(pkt.info)}</td>
             `;
             tr.addEventListener("click", () => openHexDump(pkt.no, pkt));
