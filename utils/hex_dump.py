@@ -33,6 +33,7 @@ ETHERTYPE_IPV6 = 0x86DD
 ETHERTYPE_ARP  = 0x0806
 ETHERTYPE_VLAN = 0x8100
 ETHERTYPE_ECPRI = 0xAEFE   # O-RAN WG4 eCPRI fronthaul
+ETHERTYPE_QINQ  = 0x88A8   # 802.1ad S-VLAN (double-tagged / QinQ)
 
 # IP protocols
 PROTO_ICMP = 1
@@ -547,8 +548,8 @@ def _split_into_sections(raw_bytes: bytes) -> list[dict[str, Any]]:
 
     # Heuristic: if ethertype is a known value, treat as Ethernet
     known_ethertypes = {
-        ETHERTYPE_IP, ETHERTYPE_IPV6, ETHERTYPE_ARP, ETHERTYPE_VLAN,
-        ETHERTYPE_ECPRI,
+        ETHERTYPE_IP, ETHERTYPE_IPV6, ETHERTYPE_ARP,
+        ETHERTYPE_VLAN, ETHERTYPE_QINQ, ETHERTYPE_ECPRI,
     }
 
     if ethertype in known_ethertypes or ethertype > 0x0600:
@@ -579,13 +580,19 @@ def _split_ethernet(raw_bytes: bytes) -> list[dict[str, Any]]:
                                   fields=_eth_fields(eth_header, 0)))
     pos = 14
 
-    # Handle 802.1Q VLAN tag
-    if ethertype == ETHERTYPE_VLAN and len(raw_bytes) >= 18:
-        vlan_tag = raw_bytes[14:18]
-        ethertype = struct.unpack("!H", raw_bytes[16:18])[0]
-        sections.append(_make_section("VLAN Tag (802.1Q)", vlan_tag, 14,
-                                      fields=_vlan_fields(vlan_tag, 14)))
-        pos = 18
+    # Strip VLAN tags (single 802.1Q or double QinQ 802.1ad).
+    # Each tag is 4 bytes: TCI (2 bytes) + inner EtherType (2 bytes).
+    vlan_depth = 0
+    while ethertype in (ETHERTYPE_VLAN, ETHERTYPE_QINQ) and len(raw_bytes) >= pos + 4:
+        tag_label = "S-VLAN Tag (802.1ad)" if ethertype == ETHERTYPE_QINQ else "VLAN Tag (802.1Q)"
+        vlan_tag = raw_bytes[pos:pos + 4]
+        ethertype = struct.unpack("!H", raw_bytes[pos + 2: pos + 4])[0]
+        sections.append(_make_section(tag_label, vlan_tag, pos,
+                                      fields=_vlan_fields(vlan_tag, pos)))
+        pos += 4
+        vlan_depth += 1
+        if vlan_depth >= 3:   # safety: never loop more than 3 VLAN layers
+            break
 
     remaining = raw_bytes[pos:]
 
