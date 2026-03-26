@@ -23,6 +23,7 @@
     --accent-http: #22c55e;
     --accent-icmp: #ef4444;
     --accent-arp: #ec4899;
+    --accent-ecpri: #f97316;
     --accent-other: #64748b;
     --radius-sm: 6px;
     --radius-md: 8px;
@@ -514,6 +515,12 @@ input[type="file"]::file-selector-button:hover {
 .proto-http { color: var(--accent-http); }
 .proto-icmp { color: var(--accent-icmp); }
 .proto-arp { color: var(--accent-arp); }
+.proto-ecpri { color: var(--accent-ecpri); }
+
+/* Packet table layout helpers */
+.col-time { font-family: var(--font-mono); font-size: 0.78rem; white-space: nowrap; }
+.col-len  { font-family: var(--font-mono); text-align: right; white-space: nowrap; }
+.len-trunc { color: var(--accent-icmp); font-size: 0.85em; }
 
 /* Tshark Output */
 #tshark-output-wrapper {
