@@ -641,6 +641,354 @@ input[type="file"]::file-selector-button:hover {
 .hexdump-section:nth-child(4) .hexdump-lines { border-left-color: var(--accent-dns); }
 .hexdump-section:nth-child(5) .hexdump-lines { border-left-color: var(--accent-http); }
 
+/* =========================================================
+   Byte Inspector — Wireshark-like 3-pane modal
+   ========================================================= */
+
+/* Section color palette (background tints for hex bytes) */
+:root {
+    --bi-col-0: rgba(236, 72, 153, 0.18);   /* Ethernet  — pink   */
+    --bi-col-1: rgba(59, 130, 246, 0.18);   /* IP        — blue   */
+    --bi-col-2: rgba(34, 211, 238, 0.18);   /* Transport — cyan   */
+    --bi-col-3: rgba(34, 197, 94, 0.18);    /* Payload   — green  */
+    --bi-col-4: rgba(245, 158, 11, 0.18);   /* extra     — amber  */
+    --bi-col-5: rgba(139, 92, 246, 0.18);   /* extra     — purple */
+    --bi-col-6: rgba(239, 68, 68, 0.18);    /* extra     — red    */
+    --bi-col-7: rgba(100, 116, 139, 0.18);  /* extra     — slate  */
+
+    --bi-col-0-solid: #ec4899;
+    --bi-col-1-solid: #3b82f6;
+    --bi-col-2-solid: #22d3ee;
+    --bi-col-3-solid: #22c55e;
+    --bi-col-4-solid: #f59e0b;
+    --bi-col-5-solid: #8b5cf6;
+    --bi-col-6-solid: #ef4444;
+    --bi-col-7-solid: #64748b;
+
+    --bi-highlight: rgba(255, 215, 0, 0.5);
+    --bi-highlight-field: rgba(255, 215, 0, 0.12);
+}
+
+/* Wide modal for byte inspector */
+.bi-modal {
+    max-width: 1200px;
+    width: 96vw;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.bi-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    padding: 2rem;
+    color: var(--text-muted);
+}
+
+/* Two-column body */
+.bi-body {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+    gap: 0;
+    min-height: 0;
+}
+
+/* ---- Protocol Tree (left pane) ---- */
+.bi-tree-panel {
+    flex: 0 0 38%;
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* ---- Hex + Payload (right pane) ---- */
+.bi-hex-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-width: 0;
+}
+
+.bi-panel-title {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    padding: 0.45rem 0.9rem;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-shrink: 0;
+}
+
+.bi-payload-title {
+    border-top: 1px solid var(--border);
+}
+
+.bi-payload-note {
+    font-size: 0.7rem;
+    font-weight: 400;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    text-transform: none;
+    letter-spacing: 0;
+    opacity: 0.8;
+}
+
+/* Legend chips */
+.bi-legend {
+    margin-left: auto;
+    display: flex;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+}
+
+.bi-legend-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: none;
+    letter-spacing: 0;
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    color: #fff;
+}
+
+/* ---- Tree content ---- */
+.bi-tree {
+    overflow-y: auto;
+    flex: 1;
+    padding: 0.25rem 0;
+}
+
+.bi-tree-section {
+    border-bottom: 1px solid rgba(71, 85, 105, 0.2);
+}
+
+.bi-tree-section-hdr {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.45rem 0.75rem;
+    cursor: pointer;
+    user-select: none;
+    transition: background var(--transition-fast);
+}
+
+.bi-tree-section-hdr:hover {
+    background: var(--surface-hover);
+}
+
+.bi-tree-section-hdr.active {
+    background: var(--bi-highlight-field);
+}
+
+.bi-tree-expand {
+    font-size: 0.65rem;
+    color: var(--text-muted);
+    width: 10px;
+    flex-shrink: 0;
+    transition: transform var(--transition-fast);
+}
+
+.bi-tree-section.collapsed .bi-tree-expand {
+    transform: rotate(-90deg);
+}
+
+.bi-section-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.bi-tree-section-name {
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.bi-tree-section-meta {
+    margin-left: auto;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    white-space: nowrap;
+}
+
+.bi-tree-fields {
+    padding: 0.1rem 0 0.3rem 2.1rem;
+}
+
+.bi-tree-section.collapsed .bi-tree-fields {
+    display: none;
+}
+
+.bi-tree-field {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 0.25rem 0.75rem;
+    padding: 0.2rem 0.5rem 0.2rem 0.25rem;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background var(--transition-fast);
+    font-size: 0.78rem;
+}
+
+.bi-tree-field:hover,
+.bi-tree-field.highlighted {
+    background: var(--bi-highlight-field);
+}
+
+.bi-tree-field-name {
+    color: var(--text-muted);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.bi-tree-field-value {
+    font-family: var(--font-mono);
+    font-size: 0.74rem;
+    color: var(--text);
+    text-align: right;
+    white-space: nowrap;
+}
+
+.bi-tree-field-offset {
+    grid-column: 1 / -1;
+    font-family: var(--font-mono);
+    font-size: 0.67rem;
+    color: var(--text-muted);
+    opacity: 0.65;
+}
+
+/* ---- Interactive hex dump ---- */
+.bi-hexdump-view {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+    padding: 0.5rem 0.75rem;
+    font-family: var(--font-mono);
+    font-size: 0.76rem;
+    line-height: 1.6;
+    min-height: 0;
+}
+
+.bi-hex-row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    white-space: nowrap;
+}
+
+.bi-hex-row-offset {
+    color: var(--text-muted);
+    min-width: 36px;
+    flex-shrink: 0;
+}
+
+.bi-hex-bytes {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 0.15rem;
+}
+
+.bi-hex-group {
+    display: flex;
+    gap: 0 0.15rem;
+    margin-right: 0.4rem;
+}
+
+/* Individual byte spans */
+.hb {
+    display: inline-block;
+    padding: 0 0.1rem;
+    border-radius: 2px;
+    cursor: default;
+    transition: background var(--transition-fast);
+}
+
+.hb:hover,
+.hb.highlighted {
+    background: var(--bi-highlight) !important;
+    color: #fff;
+}
+
+.bi-hex-ascii {
+    color: var(--text-muted);
+    margin-left: 0.5rem;
+    flex-shrink: 0;
+}
+
+/* Section tint classes */
+.bi-sec-0  { background: var(--bi-col-0); }
+.bi-sec-1  { background: var(--bi-col-1); }
+.bi-sec-2  { background: var(--bi-col-2); }
+.bi-sec-3  { background: var(--bi-col-3); }
+.bi-sec-4  { background: var(--bi-col-4); }
+.bi-sec-5  { background: var(--bi-col-5); }
+.bi-sec-6  { background: var(--bi-col-6); }
+.bi-sec-7  { background: var(--bi-col-7); }
+
+/* ---- Payload byte array view ---- */
+.bi-payload-view {
+    flex: 0 0 auto;
+    max-height: 200px;
+    overflow-y: auto;
+    padding: 0.5rem 0.75rem;
+    background: var(--bg);
+    border-top: 1px solid var(--border);
+}
+
+.bi-payload-pre {
+    font-family: var(--font-mono);
+    font-size: 0.74rem;
+    line-height: 1.55;
+    white-space: pre;
+    color: var(--text);
+}
+
+.bi-payload-pre .pa-offset {
+    color: var(--accent-dns);
+}
+
+.bi-payload-pre .pa-hex {
+    color: var(--text);
+}
+
+.bi-payload-pre .pa-ascii {
+    color: var(--text-muted);
+}
+
+/* Responsive: stack panes vertically on small screens */
+@media (max-width: 700px) {
+    .bi-body {
+        flex-direction: column;
+    }
+
+    .bi-tree-panel {
+        flex: 0 0 auto;
+        max-height: 40vh;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+    }
+
+    .bi-hex-panel {
+        flex: 1;
+    }
+}
+
 /* Utility */
 .hidden {
     display: none !important;

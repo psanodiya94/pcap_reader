@@ -46,8 +46,9 @@ def get_packet_hexdump(file_path: str, packet_no: int) -> dict[str, Any]:
     Returns a dict with:
       - packet_no: requested packet number
       - total_length: total packet bytes
-      - sections: list of {name, offset, length, hex_lines}
+      - sections: list of {name, offset, length, fields, hex_lines}
       - raw_hex: full hex dump of the entire packet (for reference)
+      - bytes: list of raw byte values (integers) for interactive hex view
     """
     raw_bytes = _extract_packet_bytes(file_path, packet_no)
     if raw_bytes is None:
@@ -61,6 +62,7 @@ def get_packet_hexdump(file_path: str, packet_no: int) -> dict[str, Any]:
         "total_length": len(raw_bytes),
         "sections": sections,
         "raw_hex": raw_hex,
+        "bytes": list(raw_bytes),
     }
 
 
@@ -142,6 +144,236 @@ def _extract_with_stdlib(file_path: str, packet_no: int) -> bytes | None:
 
 
 # ---------------------------------------------------------------------------
+# Protocol field extraction — each returns list of field dicts
+# ---------------------------------------------------------------------------
+
+def _eth_fields(data: bytes, base: int) -> list[dict[str, Any]]:
+    """Extract Ethernet header fields with packet-absolute offsets."""
+    if len(data) < 14:
+        return []
+    dst_mac = ":".join(f"{b:02X}" for b in data[0:6])
+    src_mac = ":".join(f"{b:02X}" for b in data[6:12])
+    et = struct.unpack("!H", data[12:14])[0]
+    et_name = {
+        ETHERTYPE_IP: "IPv4",
+        ETHERTYPE_IPV6: "IPv6",
+        ETHERTYPE_ARP: "ARP",
+        ETHERTYPE_VLAN: "VLAN (802.1Q)",
+    }.get(et, f"0x{et:04X}")
+    return [
+        {"name": "Destination MAC", "offset": base,      "length": 6, "value": dst_mac},
+        {"name": "Source MAC",       "offset": base + 6,  "length": 6, "value": src_mac},
+        {"name": "EtherType",        "offset": base + 12, "length": 2, "value": f"{et_name} (0x{et:04X})"},
+    ]
+
+
+def _vlan_fields(data: bytes, base: int) -> list[dict[str, Any]]:
+    """Extract 802.1Q VLAN tag fields."""
+    if len(data) < 4:
+        return []
+    tci = struct.unpack("!H", data[0:2])[0]
+    pcp = (tci >> 13) & 0x7
+    dei = (tci >> 12) & 0x1
+    vid = tci & 0xFFF
+    et = struct.unpack("!H", data[2:4])[0]
+    et_name = {ETHERTYPE_IP: "IPv4", ETHERTYPE_IPV6: "IPv6"}.get(et, f"0x{et:04X}")
+    return [
+        {"name": "PCP + DEI + VLAN ID", "offset": base,     "length": 2, "value": f"PCP={pcp}, DEI={dei}, VID={vid}"},
+        {"name": "EtherType",           "offset": base + 2,  "length": 2, "value": f"{et_name} (0x{et:04X})"},
+    ]
+
+
+def _arp_fields(data: bytes, base: int) -> list[dict[str, Any]]:
+    """Extract ARP header fields."""
+    if len(data) < 28:
+        return []
+    hw_type = struct.unpack("!H", data[0:2])[0]
+    proto = struct.unpack("!H", data[2:4])[0]
+    hw_size = data[4]
+    proto_size = data[5]
+    op = struct.unpack("!H", data[6:8])[0]
+    op_name = {1: "Request", 2: "Reply"}.get(op, str(op))
+    sender_mac = ":".join(f"{b:02X}" for b in data[8:14])
+    sender_ip = ".".join(str(b) for b in data[14:18])
+    target_mac = ":".join(f"{b:02X}" for b in data[18:24])
+    target_ip = ".".join(str(b) for b in data[24:28])
+    return [
+        {"name": "Hardware Type",   "offset": base,      "length": 2, "value": f"{'Ethernet' if hw_type == 1 else str(hw_type)} ({hw_type})"},
+        {"name": "Protocol Type",   "offset": base + 2,  "length": 2, "value": f"{'IPv4' if proto == 0x0800 else f'0x{proto:04X}'}"},
+        {"name": "Hardware Size",   "offset": base + 4,  "length": 1, "value": str(hw_size)},
+        {"name": "Protocol Size",   "offset": base + 5,  "length": 1, "value": str(proto_size)},
+        {"name": "Opcode",          "offset": base + 6,  "length": 2, "value": f"{op_name} ({op})"},
+        {"name": "Sender MAC",      "offset": base + 8,  "length": 6, "value": sender_mac},
+        {"name": "Sender IP",       "offset": base + 14, "length": 4, "value": sender_ip},
+        {"name": "Target MAC",      "offset": base + 18, "length": 6, "value": target_mac},
+        {"name": "Target IP",       "offset": base + 24, "length": 4, "value": target_ip},
+    ]
+
+
+def _ipv4_fields(data: bytes, base: int) -> list[dict[str, Any]]:
+    """Extract IPv4 header fields."""
+    if len(data) < 20:
+        return []
+    ver_ihl = data[0]
+    ver = (ver_ihl >> 4) & 0xF
+    ihl = (ver_ihl & 0xF) * 4
+    dscp_ecn = data[1]
+    total_len = struct.unpack("!H", data[2:4])[0]
+    ident = struct.unpack("!H", data[4:6])[0]
+    flags_frag = struct.unpack("!H", data[6:8])[0]
+    flags = (flags_frag >> 13) & 0x7
+    frag_offset = flags_frag & 0x1FFF
+    ttl = data[8]
+    proto = data[9]
+    proto_name = {PROTO_ICMP: "ICMP", PROTO_TCP: "TCP", PROTO_UDP: "UDP", PROTO_ICMPV6: "ICMPv6"}.get(proto, str(proto))
+    checksum = struct.unpack("!H", data[10:12])[0]
+    src_ip = ".".join(str(b) for b in data[12:16])
+    dst_ip = ".".join(str(b) for b in data[16:20])
+
+    flag_parts = []
+    if flags & 0x2:
+        flag_parts.append("DF")
+    if flags & 0x1:
+        flag_parts.append("MF")
+    flag_str = "|".join(flag_parts) if flag_parts else "None"
+
+    return [
+        {"name": f"Version ({ver}) + IHL ({ihl} bytes)",  "offset": base,      "length": 1, "value": f"0x{ver_ihl:02X}"},
+        {"name": "DSCP + ECN",                             "offset": base + 1,  "length": 1, "value": f"0x{dscp_ecn:02X}"},
+        {"name": "Total Length",                           "offset": base + 2,  "length": 2, "value": str(total_len)},
+        {"name": "Identification",                         "offset": base + 4,  "length": 2, "value": f"0x{ident:04X}"},
+        {"name": f"Flags ({flag_str}) + Fragment Offset",  "offset": base + 6,  "length": 2, "value": f"Flags=0x{flags:X}, FragOff={frag_offset}"},
+        {"name": "TTL",                                    "offset": base + 8,  "length": 1, "value": str(ttl)},
+        {"name": "Protocol",                               "offset": base + 9,  "length": 1, "value": f"{proto_name} ({proto})"},
+        {"name": "Header Checksum",                        "offset": base + 10, "length": 2, "value": f"0x{checksum:04X}"},
+        {"name": "Source IP",                              "offset": base + 12, "length": 4, "value": src_ip},
+        {"name": "Destination IP",                         "offset": base + 16, "length": 4, "value": dst_ip},
+    ]
+
+
+def _ipv6_fields(data: bytes, base: int) -> list[dict[str, Any]]:
+    """Extract IPv6 header fields."""
+    if len(data) < 40:
+        return []
+    ver_tc_fl = struct.unpack("!I", data[0:4])[0]
+    ver = (ver_tc_fl >> 28) & 0xF
+    tc = (ver_tc_fl >> 20) & 0xFF
+    fl = ver_tc_fl & 0xFFFFF
+    payload_len = struct.unpack("!H", data[4:6])[0]
+    next_header = data[6]
+    hop_limit = data[7]
+    nh_name = {PROTO_ICMP: "ICMP", PROTO_TCP: "TCP", PROTO_UDP: "UDP", PROTO_ICMPV6: "ICMPv6",
+               43: "Routing", 44: "Fragment", 59: "No Next Header"}.get(next_header, str(next_header))
+
+    def _fmt_ipv6(d: bytes) -> str:
+        groups = [f"{struct.unpack('!H', d[i:i + 2])[0]:04X}" for i in range(0, 16, 2)]
+        return ":".join(groups)
+
+    src = _fmt_ipv6(data[8:24])
+    dst = _fmt_ipv6(data[24:40])
+    return [
+        {"name": "Version + Traffic Class + Flow Label", "offset": base,      "length": 4,  "value": f"Ver={ver}, TC={tc}, FL=0x{fl:05X}"},
+        {"name": "Payload Length",                       "offset": base + 4,  "length": 2,  "value": str(payload_len)},
+        {"name": "Next Header",                          "offset": base + 6,  "length": 1,  "value": f"{nh_name} ({next_header})"},
+        {"name": "Hop Limit",                            "offset": base + 7,  "length": 1,  "value": str(hop_limit)},
+        {"name": "Source IPv6",                          "offset": base + 8,  "length": 16, "value": src},
+        {"name": "Destination IPv6",                     "offset": base + 24, "length": 16, "value": dst},
+    ]
+
+
+def _tcp_fields(data: bytes, base: int) -> list[dict[str, Any]]:
+    """Extract TCP header fields."""
+    if len(data) < 20:
+        return []
+    src_port = struct.unpack("!H", data[0:2])[0]
+    dst_port = struct.unpack("!H", data[2:4])[0]
+    seq = struct.unpack("!I", data[4:8])[0]
+    ack_num = struct.unpack("!I", data[8:12])[0]
+    data_off_byte = data[12]
+    data_off = ((data_off_byte >> 4) & 0xF) * 4
+    flags_byte = data[13]
+    flag_parts = []
+    if flags_byte & 0x01: flag_parts.append("FIN")
+    if flags_byte & 0x02: flag_parts.append("SYN")
+    if flags_byte & 0x04: flag_parts.append("RST")
+    if flags_byte & 0x08: flag_parts.append("PSH")
+    if flags_byte & 0x10: flag_parts.append("ACK")
+    if flags_byte & 0x20: flag_parts.append("URG")
+    flag_str = "|".join(flag_parts) if flag_parts else "None"
+    window = struct.unpack("!H", data[14:16])[0]
+    checksum = struct.unpack("!H", data[16:18])[0]
+    urg_ptr = struct.unpack("!H", data[18:20])[0]
+    return [
+        {"name": "Source Port",           "offset": base,      "length": 2, "value": str(src_port)},
+        {"name": "Destination Port",      "offset": base + 2,  "length": 2, "value": str(dst_port)},
+        {"name": "Sequence Number",       "offset": base + 4,  "length": 4, "value": str(seq)},
+        {"name": "Acknowledgment Number", "offset": base + 8,  "length": 4, "value": str(ack_num)},
+        {"name": f"Data Offset ({data_off} bytes) + Flags", "offset": base + 12, "length": 2, "value": f"Flags: {flag_str}"},
+        {"name": "Window Size",           "offset": base + 14, "length": 2, "value": str(window)},
+        {"name": "Checksum",              "offset": base + 16, "length": 2, "value": f"0x{checksum:04X}"},
+        {"name": "Urgent Pointer",        "offset": base + 18, "length": 2, "value": str(urg_ptr)},
+    ]
+
+
+def _udp_fields(data: bytes, base: int) -> list[dict[str, Any]]:
+    """Extract UDP header fields."""
+    if len(data) < 8:
+        return []
+    src_port = struct.unpack("!H", data[0:2])[0]
+    dst_port = struct.unpack("!H", data[2:4])[0]
+    length = struct.unpack("!H", data[4:6])[0]
+    checksum = struct.unpack("!H", data[6:8])[0]
+    return [
+        {"name": "Source Port",      "offset": base,     "length": 2, "value": str(src_port)},
+        {"name": "Destination Port", "offset": base + 2, "length": 2, "value": str(dst_port)},
+        {"name": "Length",           "offset": base + 4, "length": 2, "value": str(length)},
+        {"name": "Checksum",         "offset": base + 6, "length": 2, "value": f"0x{checksum:04X}"},
+    ]
+
+
+def _icmp_fields(data: bytes, base: int) -> list[dict[str, Any]]:
+    """Extract ICMP header fields."""
+    if len(data) < 8:
+        return []
+    icmp_type = data[0]
+    code = data[1]
+    checksum = struct.unpack("!H", data[2:4])[0]
+    rest = struct.unpack("!I", data[4:8])[0]
+    type_name = {
+        0: "Echo Reply", 3: "Destination Unreachable", 8: "Echo Request",
+        11: "Time Exceeded", 12: "Parameter Problem",
+    }.get(icmp_type, f"Type {icmp_type}")
+    return [
+        {"name": "Type",            "offset": base,     "length": 1, "value": f"{type_name} ({icmp_type})"},
+        {"name": "Code",            "offset": base + 1, "length": 1, "value": str(code)},
+        {"name": "Checksum",        "offset": base + 2, "length": 2, "value": f"0x{checksum:04X}"},
+        {"name": "Rest of Header",  "offset": base + 4, "length": 4, "value": f"0x{rest:08X}"},
+    ]
+
+
+def _icmpv6_fields(data: bytes, base: int) -> list[dict[str, Any]]:
+    """Extract ICMPv6 header fields."""
+    if len(data) < 8:
+        return []
+    icmp_type = data[0]
+    code = data[1]
+    checksum = struct.unpack("!H", data[2:4])[0]
+    rest = struct.unpack("!I", data[4:8])[0]
+    type_name = {
+        1: "Destination Unreachable", 2: "Packet Too Big", 3: "Time Exceeded",
+        128: "Echo Request", 129: "Echo Reply", 133: "Router Solicitation",
+        134: "Router Advertisement", 135: "Neighbor Solicitation",
+        136: "Neighbor Advertisement",
+    }.get(icmp_type, f"Type {icmp_type}")
+    return [
+        {"name": "Type",           "offset": base,     "length": 1, "value": f"{type_name} ({icmp_type})"},
+        {"name": "Code",           "offset": base + 1, "length": 1, "value": str(code)},
+        {"name": "Checksum",       "offset": base + 2, "length": 2, "value": f"0x{checksum:04X}"},
+        {"name": "Rest of Header", "offset": base + 4, "length": 4, "value": f"0x{rest:08X}"},
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Section splitting — dissect raw bytes into header + payload sections
 # ---------------------------------------------------------------------------
 
@@ -185,14 +417,16 @@ def _split_ethernet(raw_bytes: bytes) -> list[dict[str, Any]]:
     # Ethernet Header (14 bytes)
     eth_header = raw_bytes[:14]
     ethertype = struct.unpack("!H", raw_bytes[12:14])[0]
-    sections.append(_make_section("Ethernet Header", eth_header, 0))
+    sections.append(_make_section("Ethernet Header", eth_header, 0,
+                                  fields=_eth_fields(eth_header, 0)))
     pos = 14
 
     # Handle 802.1Q VLAN tag
     if ethertype == ETHERTYPE_VLAN and len(raw_bytes) >= 18:
         vlan_tag = raw_bytes[14:18]
         ethertype = struct.unpack("!H", raw_bytes[16:18])[0]
-        sections.append(_make_section("VLAN Tag (802.1Q)", vlan_tag, 14))
+        sections.append(_make_section("VLAN Tag (802.1Q)", vlan_tag, 14,
+                                      fields=_vlan_fields(vlan_tag, 14)))
         pos = 18
 
     remaining = raw_bytes[pos:]
@@ -204,11 +438,15 @@ def _split_ethernet(raw_bytes: bytes) -> list[dict[str, Any]]:
         ip_sections = _split_from_ip(remaining, pos, is_v6=True)
         sections.extend(ip_sections)
     elif ethertype == ETHERTYPE_ARP and len(remaining) >= 28:
-        sections.append(_make_section("ARP Header", remaining[:28], pos))
+        arp_data = remaining[:28]
+        sections.append(_make_section("ARP Header", arp_data, pos,
+                                      fields=_arp_fields(arp_data, pos)))
         if len(remaining) > 28:
-            sections.append(_make_section("Payload", remaining[28:], pos + 28))
+            sections.append(_make_section("Payload", remaining[28:], pos + 28,
+                                          payload_relative=True))
     elif remaining:
-        sections.append(_make_section("Payload", remaining, pos))
+        sections.append(_make_section("Payload", remaining, pos,
+                                      payload_relative=True))
 
     return sections
 
@@ -222,7 +460,8 @@ def _split_from_ip(
     if is_v6:
         ipv6_header = data[:40]
         next_header = data[6] if len(data) > 6 else 0
-        sections.append(_make_section("IPv6 Header", ipv6_header, base_offset))
+        sections.append(_make_section("IPv6 Header", ipv6_header, base_offset,
+                                      fields=_ipv6_fields(ipv6_header, base_offset)))
         transport_data = data[40:]
         transport_offset = base_offset + 40
         proto = next_header
@@ -234,7 +473,8 @@ def _split_from_ip(
             ihl = len(data)
         ip_header = data[:ihl]
         proto = data[9] if len(data) > 9 else 0
-        sections.append(_make_section("IPv4 Header", ip_header, base_offset))
+        sections.append(_make_section("IPv4 Header", ip_header, base_offset,
+                                      fields=_ipv4_fields(ip_header, base_offset)))
         transport_data = data[ihl:]
         transport_offset = base_offset + ihl
 
@@ -244,7 +484,8 @@ def _split_from_ip(
     )
 
     if payload_data:
-        sections.append(_make_section("Payload", payload_data, payload_offset))
+        sections.append(_make_section("Payload", payload_data, payload_offset,
+                                      payload_relative=True))
 
     return sections
 
@@ -264,19 +505,27 @@ def _split_transport(
         if tcp_header_len > len(data):
             tcp_header_len = len(data)
 
-        sections.append(_make_section("TCP Header", data[:tcp_header_len], base_offset))
+        tcp_hdr = data[:tcp_header_len]
+        sections.append(_make_section("TCP Header", tcp_hdr, base_offset,
+                                      fields=_tcp_fields(tcp_hdr, base_offset)))
         return data[tcp_header_len:], base_offset + tcp_header_len
 
     elif proto == PROTO_UDP and len(data) >= 8:
-        sections.append(_make_section("UDP Header", data[:8], base_offset))
+        udp_hdr = data[:8]
+        sections.append(_make_section("UDP Header", udp_hdr, base_offset,
+                                      fields=_udp_fields(udp_hdr, base_offset)))
         return data[8:], base_offset + 8
 
     elif proto == PROTO_ICMP and len(data) >= 8:
-        sections.append(_make_section("ICMP Header", data[:8], base_offset))
+        icmp_hdr = data[:8]
+        sections.append(_make_section("ICMP Header", icmp_hdr, base_offset,
+                                      fields=_icmp_fields(icmp_hdr, base_offset)))
         return data[8:], base_offset + 8
 
     elif proto == PROTO_ICMPV6 and len(data) >= 8:
-        sections.append(_make_section("ICMPv6 Header", data[:8], base_offset))
+        icmpv6_hdr = data[:8]
+        sections.append(_make_section("ICMPv6 Header", icmpv6_hdr, base_offset,
+                                      fields=_icmpv6_fields(icmpv6_hdr, base_offset)))
         return data[8:], base_offset + 8
 
     elif data:
@@ -290,13 +539,28 @@ def _split_transport(
 # Formatting helpers
 # ---------------------------------------------------------------------------
 
-def _make_section(name: str, data: bytes, offset: int) -> dict[str, Any]:
-    """Create a section dict with hex dump lines."""
+def _make_section(
+    name: str,
+    data: bytes,
+    offset: int,
+    fields: list[dict[str, Any]] | None = None,
+    *,
+    payload_relative: bool = False,
+) -> dict[str, Any]:
+    """Create a section dict with hex dump lines and optional field breakdown.
+
+    When payload_relative=True the hex dump offsets start from 0 (relative
+    to the beginning of this section) instead of the absolute packet offset.
+    This is used for the Payload section so consumers can index payload[0..N].
+    """
+    hex_start = 0 if payload_relative else offset
     return {
         "name": name,
         "offset": offset,
         "length": len(data),
-        "hex_lines": _format_hex_block(data, offset),
+        "payload_relative": payload_relative,
+        "fields": fields or [],
+        "hex_lines": _format_hex_block(data, hex_start),
     }
 
 

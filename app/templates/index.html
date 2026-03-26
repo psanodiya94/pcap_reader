@@ -188,19 +188,35 @@
             </div>
         </section>
 
-        <!-- Hex Dump Modal -->
+        <!-- Byte Inspector Modal (Wireshark-like 3-pane layout) -->
         <dialog id="hexdump-modal" class="modal-overlay">
-            <div class="modal">
+            <div class="modal bi-modal">
                 <div class="modal-header">
-                    <h3 id="hexdump-title">Hex Dump</h3>
-                    <button class="btn-close" id="hexdump-close" aria-label="Close hex dump">&times;</button>
+                    <h3 id="hexdump-title">Byte Inspector</h3>
+                    <button class="btn-close" id="hexdump-close" aria-label="Close byte inspector">&times;</button>
                 </div>
-                <div class="modal-body" id="hexdump-body">
-                    <div class="hexdump-loading hidden" id="hexdump-loading">
-                        <div class="spinner" aria-hidden="true"></div>
-                        <span>Loading hex dump...</span>
+                <div class="bi-loading hidden" id="hexdump-loading">
+                    <div class="spinner" aria-hidden="true"></div>
+                    <span>Loading...</span>
+                </div>
+                <div class="bi-body" id="hexdump-body">
+                    <!-- Left: Protocol Tree -->
+                    <div class="bi-tree-panel">
+                        <div class="bi-panel-title">Protocol Tree</div>
+                        <div id="bi-tree" class="bi-tree"></div>
                     </div>
-                    <div id="hexdump-content"></div>
+                    <!-- Right: Hex dump + Payload byte array -->
+                    <div class="bi-hex-panel">
+                        <div class="bi-panel-title">Packet Bytes
+                            <span class="bi-legend" id="bi-legend"></span>
+                        </div>
+                        <div id="bi-hexdump" class="bi-hexdump-view"></div>
+                        <div class="bi-panel-title bi-payload-title hidden" id="bi-payload-title">
+                            Payload Byte Array
+                            <span class="bi-payload-note">offsets relative to payload[0]</span>
+                        </div>
+                        <div id="bi-payload" class="bi-payload-view hidden"></div>
+                    </div>
                 </div>
             </div>
         </dialog>
