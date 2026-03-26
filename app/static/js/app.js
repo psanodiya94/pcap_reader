@@ -330,57 +330,289 @@ document.addEventListener("DOMContentLoaded", () => {
         tsharkOutputWrapper.classList.remove("hidden");
     }
 
-    // --- Hex Dump Modal (using <dialog>) ---
-    const hexModal = document.getElementById("hexdump-modal");
-    const hexTitle = document.getElementById("hexdump-title");
-    const hexBody = document.getElementById("hexdump-content");
-    const hexLoading = document.getElementById("hexdump-loading");
-    const hexClose = document.getElementById("hexdump-close");
+    // =========================================================
+    // Byte Inspector — Wireshark-like 3-pane modal
+    // =========================================================
+
+    const hexModal    = document.getElementById("hexdump-modal");
+    const hexTitle    = document.getElementById("hexdump-title");
+    const hexLoading  = document.getElementById("hexdump-loading");
+    const hexClose    = document.getElementById("hexdump-close");
+    const biTree      = document.getElementById("bi-tree");
+    const biHexdump   = document.getElementById("bi-hexdump");
+    const biPayload   = document.getElementById("bi-payload");
+    const biPayTitle  = document.getElementById("bi-payload-title");
+    const biLegend    = document.getElementById("bi-legend");
 
     hexClose.addEventListener("click", () => hexModal.close());
     hexModal.addEventListener("click", (e) => {
-        // Close when clicking the backdrop (outside the .modal div)
-        if (e.target === hexModal) {
-            hexModal.close();
-        }
+        if (e.target === hexModal) hexModal.close();
     });
+
+    // Per-section color palette
+    const SEC_CLASSES = ["bi-sec-0","bi-sec-1","bi-sec-2","bi-sec-3",
+                         "bi-sec-4","bi-sec-5","bi-sec-6","bi-sec-7"];
+    const SEC_COLORS  = ["#ec4899","#3b82f6","#22d3ee","#22c55e",
+                         "#f59e0b","#8b5cf6","#ef4444","#64748b"];
+
+    function secClass(idx) { return SEC_CLASSES[idx % SEC_CLASSES.length]; }
+    function secColor(idx) { return SEC_COLORS[idx % SEC_COLORS.length]; }
 
     async function openHexDump(packetNo, pkt) {
         hexModal.showModal();
-        hexTitle.textContent = `Packet #${packetNo} — ${pkt.protocol} — ${pkt.src} → ${pkt.dst} (${pkt.length} bytes)`;
-        hexBody.innerHTML = "";
+        hexTitle.textContent =
+            `Packet #${packetNo} \u2014 ${pkt.protocol} \u2014 ${pkt.src} \u2192 ${pkt.dst} (${pkt.length} bytes)`;
+
+        // Reset panes
+        biTree.innerHTML = "";
+        biHexdump.innerHTML = "";
+        biPayload.innerHTML = "";
+        biPayload.classList.add("hidden");
+        biPayTitle.classList.add("hidden");
+        biLegend.innerHTML = "";
         hexLoading.classList.remove("hidden");
+        document.getElementById("hexdump-body").classList.add("hidden");
 
         try {
             const resp = await fetch(`/api/hexdump/${packetNo}`);
             const data = await resp.json();
             hexLoading.classList.add("hidden");
+            document.getElementById("hexdump-body").classList.remove("hidden");
 
             if (!resp.ok) {
-                hexBody.innerHTML = `<p style="color:var(--error)">${escapeHtml(data.error || "Failed to load hex dump")}</p>`;
+                biTree.innerHTML =
+                    `<p style="color:var(--error);padding:1rem">${escapeHtml(data.error || "Failed to load")}</p>`;
                 return;
             }
 
-            let html = "";
-            for (const section of data.sections ?? []) {
-                html += `<div class="hexdump-section">`;
-                html += `<div class="hexdump-section-header">`;
-                html += `<span class="hexdump-section-name">${escapeHtml(section.name)}</span>`;
-                html += `<span class="hexdump-section-meta">offset 0x${section.offset.toString(16).toUpperCase().padStart(4, "0")} &middot; ${section.length} bytes</span>`;
-                html += `</div>`;
-                html += `<pre class="hexdump-lines">`;
-                html += escapeHtml((section.hex_lines ?? []).join("\n"));
-                html += `</pre></div>`;
+            const sections = data.sections ?? [];
+            const rawBytes = data.bytes ?? [];
+
+            if (!sections.length) {
+                biTree.innerHTML =
+                    `<p style="color:var(--text-muted);padding:1rem">No data available.</p>`;
+                return;
             }
 
-            if (!data.sections?.length) {
-                html = `<p style="color:var(--text-muted)">No hex data available for this packet.</p>`;
+            // Build lookup: "sIdx:fIdx" -> Set<absOffset>
+            const fieldToBytes = new Map();
+            sections.forEach((sec, sIdx) => {
+                (sec.fields ?? []).forEach((f, fIdx) => {
+                    const key = `${sIdx}:${fIdx}`;
+                    const set = new Set();
+                    for (let b = 0; b < f.length; b++) set.add(f.offset + b);
+                    fieldToBytes.set(key, set);
+                });
+            });
+
+            // Build per-byte → section index array
+            const byteToSection = new Uint8Array(rawBytes.length).fill(255);
+            sections.forEach((sec, sIdx) => {
+                const end = Math.min(sec.offset + sec.length, rawBytes.length);
+                for (let i = sec.offset; i < end; i++) byteToSection[i] = sIdx;
+            });
+
+            // ---- Legend ----
+            sections.forEach((sec, sIdx) => {
+                const chip = document.createElement("span");
+                chip.className = "bi-legend-chip";
+                chip.style.background = secColor(sIdx);
+                chip.textContent = sec.name.replace(/ Header$/, "").replace(/ \(.*\)$/, "");
+                biLegend.appendChild(chip);
+            });
+
+            // ---- Interactive hex dump (right pane) ----
+            const hexFrag = document.createDocumentFragment();
+            const byteSpans = [];   // indexed by absOffset
+
+            for (let rowStart = 0; rowStart < rawBytes.length; rowStart += 16) {
+                const row = document.createElement("div");
+                row.className = "bi-hex-row";
+
+                const offsetSpan = document.createElement("span");
+                offsetSpan.className = "bi-hex-row-offset";
+                offsetSpan.textContent = rowStart.toString(16).toUpperCase().padStart(4, "0");
+                row.appendChild(offsetSpan);
+
+                const bytesDiv = document.createElement("div");
+                bytesDiv.className = "bi-hex-bytes";
+
+                let ascii = "";
+                for (let g = 0; g < 2; g++) {
+                    const grp = document.createElement("span");
+                    grp.className = "bi-hex-group";
+                    for (let b = 0; b < 8; b++) {
+                        const absOff = rowStart + g * 8 + b;
+                        if (absOff >= rawBytes.length) break;
+                        const byteVal = rawBytes[absOff];
+                        const sIdx = byteToSection[absOff];
+                        const sp = document.createElement("span");
+                        sp.className = "hb" + (sIdx < 255 ? " " + secClass(sIdx) : "");
+                        sp.dataset.abs = absOff;
+                        sp.textContent = byteVal.toString(16).toUpperCase().padStart(2, "0");
+                        grp.appendChild(sp);
+                        byteSpans[absOff] = sp;
+                        ascii += (byteVal >= 0x20 && byteVal < 0x7F)
+                            ? String.fromCharCode(byteVal) : ".";
+                    }
+                    bytesDiv.appendChild(grp);
+                }
+
+                const asciiSpan = document.createElement("span");
+                asciiSpan.className = "bi-hex-ascii";
+                asciiSpan.textContent = `|${ascii}|`;
+
+                row.appendChild(bytesDiv);
+                row.appendChild(asciiSpan);
+                hexFrag.appendChild(row);
+            }
+            biHexdump.appendChild(hexFrag);
+
+            // ---- Protocol tree (left pane) ----
+            const treeFrag = document.createDocumentFragment();
+            sections.forEach((sec, sIdx) => {
+                const secDiv = document.createElement("div");
+                secDiv.className = "bi-tree-section";
+
+                const hdr = document.createElement("div");
+                hdr.className = "bi-tree-section-hdr";
+
+                const expandSpan = document.createElement("span");
+                expandSpan.className = "bi-tree-expand";
+                expandSpan.textContent = "\u25BC";
+
+                const dot = document.createElement("span");
+                dot.className = "bi-section-dot";
+                dot.style.background = secColor(sIdx);
+
+                const nameSpan = document.createElement("span");
+                nameSpan.className = "bi-tree-section-name";
+                nameSpan.textContent = sec.name;
+
+                const metaSpan = document.createElement("span");
+                metaSpan.className = "bi-tree-section-meta";
+                const absHex = sec.offset.toString(16).toUpperCase().padStart(4, "0");
+                metaSpan.textContent = `0x${absHex}  ${sec.length}B`;
+
+                hdr.appendChild(expandSpan);
+                hdr.appendChild(dot);
+                hdr.appendChild(nameSpan);
+                hdr.appendChild(metaSpan);
+
+                hdr.addEventListener("click", () => secDiv.classList.toggle("collapsed"));
+
+                hdr.addEventListener("mouseenter", () => {
+                    for (let i = sec.offset; i < sec.offset + sec.length && i < byteSpans.length; i++) {
+                        if (byteSpans[i]) byteSpans[i].classList.add("highlighted");
+                    }
+                });
+                hdr.addEventListener("mouseleave", () => {
+                    for (let i = sec.offset; i < sec.offset + sec.length && i < byteSpans.length; i++) {
+                        if (byteSpans[i]) byteSpans[i].classList.remove("highlighted");
+                    }
+                });
+
+                secDiv.appendChild(hdr);
+
+                // Fields list
+                const fieldsDiv = document.createElement("div");
+                fieldsDiv.className = "bi-tree-fields";
+
+                if (sec.fields && sec.fields.length) {
+                    sec.fields.forEach((field, fIdx) => {
+                        const fDiv = document.createElement("div");
+                        fDiv.className = "bi-tree-field";
+
+                        const nameEl = document.createElement("span");
+                        nameEl.className = "bi-tree-field-name";
+                        nameEl.title = field.name;
+                        nameEl.textContent = field.name;
+
+                        const valEl = document.createElement("span");
+                        valEl.className = "bi-tree-field-value";
+                        valEl.textContent = field.value ?? "";
+
+                        const offEl = document.createElement("span");
+                        offEl.className = "bi-tree-field-offset";
+                        const fieldAbsHex = field.offset.toString(16).toUpperCase().padStart(4, "0");
+                        let offsetLabel = `abs 0x${fieldAbsHex}  \u00B7  ${field.length} byte${field.length !== 1 ? "s" : ""}`;
+                        if (sec.payload_relative) {
+                            const relOff = field.offset - sec.offset;
+                            offsetLabel += `  \u00B7  payload[0x${relOff.toString(16).toUpperCase().padStart(4, "0")}]`;
+                        }
+                        offEl.textContent = offsetLabel;
+
+                        fDiv.appendChild(nameEl);
+                        fDiv.appendChild(valEl);
+                        fDiv.appendChild(offEl);
+
+                        const key = `${sIdx}:${fIdx}`;
+                        fDiv.addEventListener("mouseenter", () => {
+                            fDiv.classList.add("highlighted");
+                            (fieldToBytes.get(key) ?? new Set()).forEach((abs) => {
+                                if (byteSpans[abs]) byteSpans[abs].classList.add("highlighted");
+                            });
+                            if (byteSpans[field.offset]) {
+                                byteSpans[field.offset].scrollIntoView(
+                                    { block: "nearest", behavior: "smooth" }
+                                );
+                            }
+                        });
+                        fDiv.addEventListener("mouseleave", () => {
+                            fDiv.classList.remove("highlighted");
+                            (fieldToBytes.get(key) ?? new Set()).forEach((abs) => {
+                                if (byteSpans[abs]) byteSpans[abs].classList.remove("highlighted");
+                            });
+                        });
+
+                        fieldsDiv.appendChild(fDiv);
+                    });
+                } else if (sec.payload_relative) {
+                    const note = document.createElement("div");
+                    note.style.cssText = "font-size:0.74rem;color:var(--text-muted);padding:0.2rem 0.25rem";
+                    note.textContent = `${sec.length} bytes \u2014 see Payload Byte Array below`;
+                    fieldsDiv.appendChild(note);
+                }
+
+                secDiv.appendChild(fieldsDiv);
+                treeFrag.appendChild(secDiv);
+            });
+            biTree.appendChild(treeFrag);
+
+            // ---- Payload byte array view ----
+            const payloadSection = sections.find((s) => s.payload_relative);
+            if (payloadSection && payloadSection.length > 0) {
+                biPayTitle.classList.remove("hidden");
+                biPayload.classList.remove("hidden");
+
+                const pre = document.createElement("pre");
+                pre.className = "bi-payload-pre";
+
+                const payBytes = rawBytes.slice(
+                    payloadSection.offset,
+                    payloadSection.offset + payloadSection.length,
+                );
+                let payHtml = "";
+                for (let i = 0; i < payBytes.length; i += 16) {
+                    const chunk = payBytes.slice(i, i + 16);
+                    const offStr = i.toString(16).toUpperCase().padStart(4, "0");
+                    const hexLeft  = chunk.slice(0, 8).map((b) => b.toString(16).toUpperCase().padStart(2, "0")).join(" ").padEnd(23, " ");
+                    const hexRight = chunk.slice(8).map((b) => b.toString(16).toUpperCase().padStart(2, "0")).join(" ").padEnd(23, " ");
+                    const ascii = Array.from(chunk).map((b) => (b >= 0x20 && b < 0x7F) ? String.fromCharCode(b) : ".").join("");
+                    payHtml +=
+                        `<span class="pa-offset">payload[0x${offStr}]</span>  ` +
+                        `<span class="pa-hex">${escapeHtml(hexLeft)}  ${escapeHtml(hexRight)}</span>  ` +
+                        `<span class="pa-ascii">|${escapeHtml(ascii)}|</span>\n`;
+                }
+                pre.innerHTML = payHtml;
+                biPayload.appendChild(pre);
             }
 
-            hexBody.innerHTML = html;
         } catch (err) {
             hexLoading.classList.add("hidden");
-            hexBody.innerHTML = `<p style="color:var(--error)">Request failed: ${escapeHtml(err.message)}</p>`;
+            document.getElementById("hexdump-body").classList.remove("hidden");
+            biTree.innerHTML =
+                `<p style="color:var(--error);padding:1rem">Request failed: ${escapeHtml(err.message)}</p>`;
         }
     }
 
