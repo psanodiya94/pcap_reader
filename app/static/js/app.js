@@ -263,15 +263,32 @@ document.addEventListener("DOMContentLoaded", () => {
         tsharkOutputWrapper.classList.add("hidden");
     }
 
+    /**
+     * Format packet timestamp as "YYYY-MM-DD HH:MM:SS.nnnnnnnnn" (local time).
+     * Falls back to raw seconds.nanoseconds if ts_sec is missing.
+     */
+    function formatPktTime(pkt) {
+        if (pkt.ts_sec === undefined) {
+            return pkt.time != null ? pkt.time.toFixed(9) : "";
+        }
+        const ns = pkt.ts_nsec ?? 0;
+        const d  = new Date(pkt.ts_sec * 1000);   // Date uses ms
+        const pad2 = (n) => String(n).padStart(2, "0");
+        const pad9 = (n) => String(n).padStart(9, "0");
+        const date =
+            `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+        const time =
+            `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+        return `${date} ${time}.${pad9(ns)}`;
+    }
+
     function renderPacketTable(packets) {
         packetTbody.innerHTML = "";
         const fragment = document.createDocumentFragment();
 
         for (const pkt of packets) {
             const protoClass = `proto-${pkt.protocol.toLowerCase().replace(/[^a-z0-9]/g, "")}`;
-            const timeStr = pkt.ts_sec !== undefined
-                ? `${pkt.ts_sec}.${String(pkt.ts_nsec ?? 0).padStart(9, "0")}`
-                : pkt.time.toFixed(6);
+            const timeStr = formatPktTime(pkt);
             const lenStr = (pkt.orig_len && pkt.orig_len !== pkt.length)
                 ? `<span title="Captured: ${pkt.length} bytes, Original: ${pkt.orig_len} bytes (truncated)">${pkt.length}<span class="len-trunc">/${pkt.orig_len}</span></span>`
                 : pkt.length;
